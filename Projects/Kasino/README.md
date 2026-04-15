@@ -1,6 +1,7 @@
 # Kasino - Finnish Card Game
 
 A digital version of the classic Finnish card game Kasino, built with the [Nu Game Engine](https://github.com/bryanedds/Nu).
+There is also [MonoGame version](https://github.com/Thorium/Kasino) available.
 
 ## Game Modes
 
