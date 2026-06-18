@@ -185,9 +185,10 @@ module WorldModule4 =
             |> Map.ofArrayBy World.pairWithName
 
         /// Update late bindings internally stored by the engine from types found in the given assemblies.
-        static member updateLateBindings (assemblies : Assembly array) world =
+        static member updateLateBindings initializing (assemblies : Assembly array) world =
 
             // prepare for late-bound type updating
+            WorldImSim.Initializing <- initializing
             WorldImSim.Reinitializing <- true
             Content.UpdateLateBindingsCount <- inc Content.UpdateLateBindingsCount
             World.clearEntityFromClipboard world // HACK: clear what's on the clipboard rather than changing its dispatcher instance.
@@ -244,7 +245,7 @@ module WorldModule4 =
                 for lateBindings in lateBindingsInstances do
                     World.updateLateBindings3 lateBindings simulant world
             for (simulant, _) in world.Simulants do
-                World.trySynchronize false true simulant world
+                World.trySynchronize initializing true simulant world
 
         /// Make the world.
         static member makePlus
@@ -274,8 +275,8 @@ module WorldModule4 =
             let worldExtension =
                 { ContextImSim = Address.empty
                   DeclaredImSim = Address.empty
-                  SimulantsImSim = SUMap.makeEmpty HashIdentity.Structural collectionConfig
-                  SubscriptionsImSim = SUMap.makeEmpty HashIdentity.Structural collectionConfig
+                  SimulantJournals = SUMap.makeEmpty HashIdentity.Structural collectionConfig
+                  SubscriptionJournals = SUMap.makeEmpty HashIdentity.Structural collectionConfig
                   JobGraph = jobGraph
                   GeometryViewport = geometryViewport
                   WindowViewport = windowViewport
