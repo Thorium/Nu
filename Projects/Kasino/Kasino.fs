@@ -74,6 +74,7 @@ type TableLayout =
 type DragState =
     | NotDragging
     | Dragging of cardIndex: int * startPos: Vector2 * currentPos: Vector2
+    | DraggingTable of card: Card * grabOffsetX: float32 * grabOffsetY: float32   // nudging a table card (scatter mode)
 
 // ─── Game Property Extensions ─────────────────────────────────────────
 [<AutoOpen>]
@@ -402,6 +403,22 @@ module Helpers =
             result <- result |> Map.add card (bestX, bestY, bestRot)
 
         result
+
+    /// Topmost scattered table card whose rect contains (mx, my) — for drag-to-reposition.
+    let tableCardAtScatter (table: Card list) (mx: float32) (my: float32) =
+        table
+        |> List.rev                                  // later in the list draws on top
+        |> List.tryPick (fun card ->
+            match Map.tryFind card AppState.scatteredPositions with
+            | Some (sx, sy, _) ->
+                if abs (mx - sx) <= Ly.cardW / 2.0f && abs (my - sy) <= Ly.cardH / 2.0f then Some card else None
+            | None -> None)
+
+    /// Clamp a scattered card's centre so the whole card stays within the table area.
+    let clampScatterCenter (cx: float32) (cy: float32) =
+        let maxX = Ly.tableW / 2.0f - Ly.cardW / 2.0f
+        let dy = Ly.tableH / 2.0f - Ly.cardH / 2.0f
+        (min maxX (max -maxX cx), min (Ly.tableY + dy) (max (Ly.tableY - dy) cy))
 
     /// Format a play result as a human-readable message
     let formatPlayResult (playerName: string) (result: PlayResult) =
@@ -857,6 +874,18 @@ type KasinoDispatcher () =
              Entity.FontSizing .= Some 14.0f
              Entity.Elevation .= 1.0f] world
 
+        // Decorative fan of the four aces (held-in-hand shape), filling the empty
+        // band between the selection buttons and the "How to Play" button.
+        let acesFan = [ Spades, 0.30f; Hearts, 0.10f; Diamonds, -0.10f; Clubs, -0.30f ]
+        for i, (suit, rot) in List.indexed acesFan do
+            let off = float32 i - 1.5f                           // -1.5, -0.5, 0.5, 1.5
+            World.doStaticSprite ("MenuAce" + string i)
+                [Entity.Position .= v3 (off * 44.0f) (-100.0f - abs off * 7.0f) 0.0f
+                 Entity.Size .= v3 48.0f 60.0f 0.0f
+                 Entity.StaticImage .= CardImg.cardAsset { Suit = suit; Rank = Ace }
+                 Entity.Rotation .= Quaternion.CreateFromAxisAngle (Vector3.UnitZ, rot)
+                 Entity.Elevation .= 0.5f] world |> ignore
+
         // Prompt text (always declared, content changes per step)
         let promptText =
             match AppState.menuStep with
@@ -975,6 +1004,14 @@ type KasinoDispatcher () =
             AppState.rulesReturnMode <- KasinoMenu
             game.SetKasinoMode KasinoRules world
 
+        // Quit button (top-right corner; Esc also quits)
+        if World.doButton "BtnQuit"
+            [Entity.Position .= v3 250.0f 160.0f 0.0f
+             Entity.Size .= v3 110.0f Ly.btnH 0.0f
+             Entity.Text .= "Quit"
+             Entity.Elevation .= 1.0f] world then
+            if world.Unaccompanied then World.exit world
+
         // Escape to quit from menu
         if world.Advancing then
             if World.isKeyboardKeyPressed KeyboardKey.Escape world && world.Unaccompanied then
@@ -1064,6 +1101,9 @@ type KasinoDispatcher () =
                     elif Set.contains card possibleSet then Clr.tintYellow
                     else Clr.white
 
+                // lift the card being nudged so it stays on top while dragged
+                let cardElevation = match AppState.dragState with DraggingTable (dc, _, _) when dc = card -> 4.0f | _ -> 1.0f
+
                 World.doStaticSprite name
                     [Entity.Position @= v3 cx cy 0.0f
                      Entity.Size @= v3 Ly.cardW Ly.cardH 0.0f
@@ -1071,7 +1111,7 @@ type KasinoDispatcher () =
                      Entity.Color @= cardTint
                      Entity.Rotation @= rotation
                      Entity.Visible @= (not isAnimating)
-                     Entity.Elevation .= 1.0f] world |> ignore
+                     Entity.Elevation @= cardElevation] world |> ignore
 
                 // Overlay slot (kept hidden — preview indicated by card tint)
                 World.doStaticSprite $"TCO{i}"
@@ -1667,14 +1707,14 @@ type KasinoDispatcher () =
                             mx >= cx - Ly.cardW / 2.0f && mx <= cx + Ly.cardW / 2.0f &&
                             my >= cy - Ly.cardH / 2.0f && my <= cy + Ly.cardH / 2.0f)
                     AppState.hoveredCardIndex <- newHovered
-                | Dragging _ ->
+                | Dragging _ | DraggingTable _ ->
                     AppState.hoveredCardIndex <- None
 
                 // Update capture preview for selected/dragged card
                 let previewIdx =
                     match AppState.dragState with
                     | Dragging(idx, _, _) -> Some idx
-                    | NotDragging -> AppState.selectedCardIndex
+                    | NotDragging | DraggingTable _ -> AppState.selectedCardIndex
                 match previewIdx with
                 | Some idx when idx < handSize ->
                     let card = bottomPlayer.Hand[idx]
@@ -1738,9 +1778,30 @@ type KasinoDispatcher () =
                                 btnPlayVisible &&
                                 abs mx <= 90.0f &&
                                 abs (my - btnCenterY) <= Ly.btnH / 2.0f
-                            if not onPlayBtn then
-                                AppState.selectedCardIndex <- None
-                                AppState.capturePreview <- NoCapture
+                            // Otherwise, grab a table card to nudge it (scatter mode only —
+                            // the strict grid never overlaps, so nothing to untangle there).
+                            let tableCardOpt =
+                                if not onPlayBtn && AppState.tableLayout = RandomScatter
+                                then Helpers.tableCardAtScatter gs.Table mx my
+                                else None
+                            match tableCardOpt with
+                            | Some card ->
+                                match Map.tryFind card AppState.scatteredPositions with
+                                | Some (sx, sy, _) -> AppState.dragState <- DraggingTable(card, mx - sx, my - sy)
+                                | None -> ()
+                            | None ->
+                                if not onPlayBtn then
+                                    AppState.selectedCardIndex <- None
+                                    AppState.capturePreview <- NoCapture
+
+                | DraggingTable(card, gdx, gdy) ->
+                    if World.isMouseButtonDown MouseLeft world then
+                        // reposition the card under the cursor, kept inside the table area
+                        let cx, cy = Helpers.clampScatterCenter (mx - gdx) (my - gdy)
+                        let rot = match Map.tryFind card AppState.scatteredPositions with Some (_, _, r) -> r | None -> 0.0f
+                        AppState.scatteredPositions <- Map.add card (cx, cy, rot) AppState.scatteredPositions
+                    else
+                        AppState.dragState <- NotDragging
 
                 | Dragging(idx, startPos, _) ->
                     if World.isMouseButtonDown MouseLeft world then
