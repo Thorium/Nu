@@ -1,0 +1,117 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+	<PropertyGroup>
+		<OutputType>Exe</OutputType>
+		<TargetFramework>net10.0</TargetFramework>
+		<ApplicationIcon>Ace.ico</ApplicationIcon>
+		<ProjectGuid>{C3D4E5F6-A7B8-9012-CDEF-123456789012}</ProjectGuid>
+		<PlatformTarget>AnyCPU</PlatformTarget>
+		<ServerGarbageCollection>True</ServerGarbageCollection>
+		<TieredPGO>True</TieredPGO>
+		<DisableFastUpToDateCheck>True</DisableFastUpToDateCheck>
+        <SatelliteResourceLanguages>en</SatelliteResourceLanguages>
+        <PostBuildEvent>dotnet "$(MSBuildProjectDirectory)/../../Nu/Nu.Pipe/bin/$(Configuration)/$(TargetFramework)/Nu.Pipe.dll" "$(MSBuildProjectDirectory)/" "$(MSBuildProjectDirectory)/bin/$(Configuration)/$(TargetFramework)/" "$(MSBuildProjectDirectory)/refinement/" "BcCompression" "False"</PostBuildEvent>
+	</PropertyGroup>
+
+	<PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|AnyCpu'">
+		<WarnOn>FS1182</WarnOn>
+		<NoWarn>FS0009;FS0052;FS1178;FS3391;FS3536;FS3560</NoWarn>
+		<Tailcalls>False</Tailcalls>
+		<WarningLevel>5</WarningLevel>
+		<DefineConstants>TRACE</DefineConstants>
+		<WarningsAsErrors>FS0026;FS0049;FS3239;$(WarningsAsErrors)</WarningsAsErrors>
+	</PropertyGroup>
+
+	<PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release|AnyCpu'">
+		<WarnOn>FS1182</WarnOn>
+		<NoWarn>FS0009;FS0052;FS1178;FS3391;FS3536;FS3560</NoWarn>
+		<Tailcalls>False</Tailcalls>
+		<WarningLevel>5</WarningLevel>
+		<DefineConstants>TRACE</DefineConstants>
+		<WarningsAsErrors>FS0026;FS0049;FS3239;$(WarningsAsErrors)</WarningsAsErrors>
+	</PropertyGroup>
+
+	<Target Name="OverridePublishDir" AfterTargets="AssignTargetPaths">
+		<PropertyGroup>
+			<PublishDir>$(OutputPath)</PublishDir>
+		</PropertyGroup>
+	</Target>
+
+    <Target Name="BuildNuPipe" BeforeTargets="BeforeBuild">
+        <MSBuild Projects="$(MSBuildProjectDirectory)/../../Nu/Nu.Pipe/Nu.Pipe.fsproj" RemoveProperties="TargetFramework;RuntimeIdentifier;SelfContained" Targets="Restore;Build" />
+    </Target>
+
+	<Target Name="AfterCleanNuPipe" AfterTargets="Clean">
+		<RemoveDir Directories="refinement" />
+		<RemoveDir Directories="$(OutDir)/Assets" />
+	</Target>
+
+	<ItemGroup>
+        <None Include="Assets\*" />
+        <None Include="Assets\*\*" />
+		<!-- Pure, engine-independent domain layer — SHARED VERBATIM with the ImSim
+		     project via linked source. This is the whole point of the experiment:
+		     the game's mathematical essence lives in Kasino.Domain and is identical
+		     under either presentation model. -->
+		<Compile Include="..\Kasino\Cards.fs">
+			<Link>Domain\Cards.fs</Link>
+		</Compile>
+		<Compile Include="..\Kasino\Combinations.fs">
+			<Link>Domain\Combinations.fs</Link>
+		</Compile>
+		<Compile Include="..\Kasino\Rules.fs">
+			<Link>Domain\Rules.fs</Link>
+		</Compile>
+		<Compile Include="..\Kasino\Scoring.fs">
+			<Link>Domain\Scoring.fs</Link>
+		</Compile>
+		<Compile Include="..\Kasino\AI.fs">
+			<Link>Domain\AI.fs</Link>
+		</Compile>
+		<Compile Include="..\Kasino\Settings.fs">
+			<Link>Domain\Settings.fs</Link>
+		</Compile>
+		<Compile Include="..\Kasino\GameEngine.fs">
+			<Link>Domain\GameEngine.fs</Link>
+		</Compile>
+		<!-- MMCC presentation layer — new for this project. -->
+		<Compile Include="Presentation.fs" />
+		<Compile Include="Simulants.fs" />
+		<Compile Include="Events.fs" />
+		<Compile Include="Gameplay.fs" />
+		<Compile Include="RulesScreen.fs" />
+		<Compile Include="Menu.fs" />
+		<Compile Include="Scores.fs" />
+		<Compile Include="KasinoGame.fs" />
+		<Compile Include="KasinoMmccPlugin.fs" />
+		<Compile Include="Program.fs" />
+		<Content Include="AssetGraph.nuag">
+			<CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+		</Content>
+		<Content Include="Overlayer.nuol">
+			<CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+		</Content>
+	</ItemGroup>
+
+	<ItemGroup>
+		<Reference Include="AssimpNet">
+			<HintPath>..\..\Nu\Nu.Dependencies\AssimpNet\netstandard2.1\AssimpNet.dll</HintPath>
+		</Reference>
+        <Reference Include="BulletSharpPInvoke">
+            <HintPath>..\..\Nu\Nu.Dependencies\BulletSharpPInvoke\netstandard2.1\BulletSharp.dll</HintPath>
+        </Reference>
+		<Reference Include="OpenGL.Net">
+			<HintPath>..\..\Nu\Nu.Dependencies\OpenGL.NET\lib\netcoreapp2.2\OpenGL.Net.dll</HintPath>
+		</Reference>
+		<Reference Include="TiledSharp">
+			<HintPath>..\..\Nu\Nu.Dependencies\TiledSharp\lib\netstandard2.0\TiledSharp.dll</HintPath>
+		</Reference>
+	</ItemGroup>
+
+	<ItemGroup>
+		<ProjectReference Include="..\..\Nu\Nu\Nu.fsproj" />
+		<ProjectReference Include="..\..\Nu\Nu.Math\Nu.Math.csproj" />
+		<ProjectReference Include="..\..\Nu\Nu.Spine\Nu.Spine.csproj" />
+	</ItemGroup>
+
+</Project>
