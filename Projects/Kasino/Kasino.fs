@@ -586,19 +586,107 @@ module Helpers =
 
 // ─── Rules page content ───────────────────────────────────────────────
 module RulesContent =
-    let totalPages = 6
 
-    let pageTitle = function
-        | 0 -> "Game Overview"
-        | 1 -> "Card Values"
-        | 2 -> "Capturing Cards"
-        | 3 -> "Sweeps & Round End"
-        | 4 -> "Scoring"
-        | 5 -> "Laistokasino"
-        | _ -> ""
+    // A tutorial page is either a block of text, or a VISUAL page that
+    // shows real card images so new / visual players can see how
+    // capturing and scoring actually work.
+    type CardSpot = { Card: Card; X: float32; Y: float32 }
+    type Caption  = { Text: string; X: float32; Y: float32; Col: Color; Size: float32; Center: bool; W: float32 }
 
-    let pageLines = function
-        | 0 ->
+    type Page =
+        | TextPage of title: string * lines: string[]
+        | VisualPage of title: string * cards: CardSpot list * caps: Caption list
+
+    // ── Visual-page layout helpers (Nu virtual res ±320 × ±180) ──
+    let private tcw = 38.0f      // tutorial card width
+    let private tch = 49.0f      // tutorial card height
+
+    /// Centered header/footer line at y.
+    let private hdr y col text : Caption =
+        { Text = text; X = 0.0f; Y = y; Col = col; Size = 12.0f; Center = true; W = 580.0f }
+
+    /// A centered row of cards, each with a short caption beneath it.
+    let private mkRow (centerY: float32) (labelCol: Color) (items: (Card * string) list) =
+        let gap = 44.0f
+        let n = items.Length
+        let totalW = float32 n * tcw + float32 (max 0 (n - 1)) * gap
+        let startX = -totalW / 2.0f + tcw / 2.0f
+        let labelY = centerY - tch / 2.0f - 9.0f
+        items
+        |> List.mapi (fun i (c, lbl) ->
+            let x = startX + float32 i * (tcw + gap)
+            { Card = c; X = x; Y = centerY },
+            { Text = lbl; X = x; Y = labelY; Col = labelCol; Size = 11.0f; Center = true; W = 130.0f })
+        |> List.unzip
+
+    /// A group of cards laid left-to-right starting at (x, y), with a
+    /// left-justified label to the right of the cards.
+    let private mkGroup (x: float32) (y: float32) (labelCol: Color) (cards: Card list) (label: string) =
+        let gap = 6.0f
+        let spots = cards |> List.mapi (fun i c -> { Card = c; X = x + float32 i * (tcw + gap); Y = y })
+        let lastX = x + float32 (cards.Length - 1) * (tcw + gap)
+        let cap = { Text = label; X = lastX + tcw / 2.0f + 12.0f; Y = y; Col = labelCol; Size = 11.0f; Center = false; W = 250.0f }
+        spots, cap
+
+    let private cardValuesVisual () =
+        let cards1, caps1 =
+            mkRow 35.0f Clr.white
+                [ { Suit = Clubs;  Rank = Four },  "worth 4"
+                  { Suit = Hearts; Rank = Seven }, "worth 7"
+                  { Suit = Spades; Rank = King },  "worth 13" ]
+        let cards2, caps2 =
+            mkRow -75.0f Clr.lightGreen
+                [ { Suit = Diamonds; Rank = Ace }, "Ace = 14"
+                  { Suit = Spades;   Rank = Two }, "2 of spades = 15"
+                  { Suit = Diamonds; Rank = Ten }, "10 of diam. = 16" ]
+        let heads =
+            [ hdr 108.0f Clr.white    "Every card has a TABLE value and a HAND value."
+              hdr 90.0f  Clr.lightGray "Add table values; spend HAND value to capture."
+              hdr 68.0f  Clr.gold      "Normal cards: value = face value"
+              hdr -38.0f Clr.gold      "Three special cards have EXTRA capture power:" ]
+        cards1 @ cards2, heads @ caps1 @ caps2
+
+    let private capture9Visual () =
+        let gx = -170.0f
+        let s0, c0 = mkGroup gx 88.0f  Clr.gold        [ { Suit = Hearts; Rank = Nine } ]                                  "<- the 9 you play"
+        let s1, c1 = mkGroup gx 38.0f  Clr.limeGreen   [ { Suit = Clubs;  Rank = Nine } ]                                  "a 9       = 9   captured"
+        let s2, c2 = mkGroup gx -16.0f Clr.limeGreen   [ { Suit = Spades; Rank = Three }; { Suit = Diamonds; Rank = Six } ] "3 + 6 = 9   captured"
+        let s3, c3 = mkGroup gx -70.0f Clr.lightSalmon [ { Suit = Hearts; Rank = Eight } ]                                 "8 is not 9  ->  stays"
+        let heads =
+            [ hdr 118.0f  Clr.white "Play a 9: capture any cards that ADD UP to 9."
+              hdr -118.0f Clr.white "One 9 grabs BOTH 9-groups at once (3 cards)." ]
+        s0 @ s1 @ s2 @ s3, heads @ [ c0; c1; c2; c3 ]
+
+    let private takeOrLeaveVisual () =
+        let s0, c0 = mkGroup -70.0f 70.0f Clr.gold [ { Suit = Hearts; Rank = Nine }; { Suit = Clubs; Rank = Nine } ] "hand 9 + table 9"
+        let heads =
+            [ hdr 110.0f  Clr.white       "Your 9 CAN capture the table 9. Must you?"
+              hdr 10.0f   Clr.limeGreen   "STANDARD: capturing is OPTIONAL."
+              hdr -8.0f   Clr.lightGray   "Take it, or just place a card instead."
+              hdr -50.0f  Clr.lightSalmon "LAISTO: capturing is FORCED."
+              hdr -68.0f  Clr.lightGray   "If a capture is possible, you MUST take it."
+              hdr -104.0f Clr.gray        "(In Laisto a forced take hurts you.)" ]
+        s0, c0 :: heads
+
+    let private scoringVisual () =
+        let gx = -150.0f
+        let s0, c0 = mkGroup gx 95.0f  Clr.gold  [ { Suit = Diamonds; Rank = Ten } ] "10 of diamonds = 2 points"
+        let s1, c1 = mkGroup gx 42.0f  Clr.gold  [ { Suit = Spades;   Rank = Two } ] "2 of spades = 1 point"
+        let s2, c2 = mkGroup gx -11.0f Clr.white
+                        [ { Suit = Spades;   Rank = Ace }; { Suit = Hearts; Rank = Ace }
+                          { Suit = Diamonds; Rank = Ace }; { Suit = Clubs;  Rank = Ace } ] "each Ace = 1 pt (4 total)"
+        let s3, c3 = mkGroup gx -64.0f Clr.white
+                        [ { Suit = Spades; Rank = Four }; { Suit = Spades; Rank = Seven }; { Suit = Spades; Rank = Nine } ] "most Spades = 2 points"
+        let heads =
+            [ hdr 122.0f  Clr.white     "Most points come from specials & majorities:"
+              hdr -110.0f Clr.lightGray "Most cards = 1 pt      Each sweep = 1 pt" ]
+        s0 @ s1 @ s2 @ s3, heads @ [ c0; c1; c2; c3 ]
+
+    let pages : Page[] =
+        let vp title (f: unit -> CardSpot list * Caption list) =
+            let cards, caps = f ()
+            VisualPage (title, cards, caps)
+        [| TextPage ("Game Overview",
             [| "Kasino is a classic Finnish card game for 2-4 players."
                "The goal is to capture cards from the table by"
                "matching values from your hand."
@@ -609,8 +697,8 @@ module RulesContent =
                "  - If not, your card is placed on the table."
                ""
                "After all cards are played, scores are tallied."
-               "First player to reach 16 cumulative points wins!" |]
-        | 1 ->
+               "First player to reach 16 cumulative points wins!" |])
+           TextPage ("Card Values",
             [| "Cards have TWO different value systems:"
                ""
                "TABLE VALUE (for summing on the table):"
@@ -622,8 +710,9 @@ module RulesContent =
                "  Spade 2 = 15  (captures combos summing to 15)"
                "  Diamond 10 = 16  (captures combos sum to 16)"
                ""
-               "Kings can only be captured by Kings (value 13)." |]
-        | 2 ->
+               "Kings can only be captured by Kings (value 13)." |])
+           vp "Card Values at a Glance" cardValuesVisual
+           TextPage ("Capturing Cards",
             [| "When you play a card, ALL non-overlapping subsets"
                "of table cards that sum to your hand value must"
                "be captured simultaneously."
@@ -636,8 +725,10 @@ module RulesContent =
                ""
                "CAPTURE PREVIEW when selecting a card:"
                "  Green = definitely captured (in all options)"
-               "  Yellow = in some options only (choice needed)" |]
-        | 3 ->
+               "  Yellow = in some options only (choice needed)" |])
+           vp "Capturing with a 9" capture9Visual
+           vp "Take or Leave" takeOrLeaveVisual
+           TextPage ("Sweeps & Round End",
             [| "SWEEP: Capturing ALL remaining table cards"
                "earns bonus points."
                ""
@@ -649,8 +740,8 @@ module RulesContent =
                "DEALING STRUCTURE (52 cards):"
                "  4 cards to table at start."
                "  Rest dealt in waves of 4 per player:"
-               "  2 players: 6 waves, 3: 4 waves, 4: 3 waves" |]
-        | 4 ->
+               "  2 players: 6 waves, 3: 4 waves, 4: 3 waves" |])
+           TextPage ("Scoring",
             [| "SCORING (per round):"
                ""
                "  Most cards captured .... 1 point"
@@ -662,8 +753,9 @@ module RulesContent =
                ""
                "TIE: Nobody scores tied categories."
                "SWEEPS: Minimum sweep count subtracted from all."
-               "TARGET: First to 16 cumulative points wins." |]
-        | 5 ->
+               "TARGET: First to 16 cumulative points wins." |])
+           vp "Scoring Cards" scoringVisual
+           TextPage ("Laistokasino",
             [| "LAISTOKASINO (Misa-Kasino):"
                ""
                "Same rules, but goal is REVERSED:"
@@ -675,8 +767,14 @@ module RulesContent =
                "  - Sweeps hurt you!"
                "  - Sometimes placing is better than capturing."
                "  - Force opponents to sweep by leaving few"
-               "    cards on the table." |]
-        | _ -> [||]
+               "    cards on the table." |]) |]
+
+    let totalPages = pages.Length
+
+    let pageTitle page =
+        match pages.[page] with
+        | TextPage (t, _) -> t
+        | VisualPage (t, _, _) -> t
 
 // ─── Game Dispatcher ──────────────────────────────────────────────────
 type KasinoDispatcher () =
@@ -1916,7 +2014,7 @@ type KasinoDispatcher () =
              Entity.Text .= "How to Play Kasino"
              Entity.Justification .= Justified (JustifyCenter, JustifyMiddle)
              Entity.TextColor .= Clr.gold
-             Entity.FontSizing .= Some 20.0f
+             Entity.FontSizing .= Some 16.0f
              Entity.Elevation .= 1.0f] world
 
         let pageTitle = RulesContent.pageTitle AppState.rulesPage
@@ -1926,6 +2024,7 @@ type KasinoDispatcher () =
              Entity.Text @= pageTitle
              Entity.Justification .= Justified (JustifyCenter, JustifyMiddle)
              Entity.TextColor .= Clr.white
+             Entity.FontSizing .= Some 13.0f
              Entity.Elevation .= 1.0f] world
 
         let indicator = $"Page {AppState.rulesPage + 1} / {RulesContent.totalPages}"
@@ -1945,8 +2044,15 @@ type KasinoDispatcher () =
              Entity.Color .= Clr.gray
              Entity.Elevation .= 1.0f] world |> ignore
 
+        // Page body: text lines OR a visual page of card images.
+        // Both entity pools are emitted every frame; the inactive pool is
+        // hidden so nothing lingers when switching pages (ImSim).
+        let lines, cardSpots, caps =
+            match RulesContent.pages.[AppState.rulesPage] with
+            | RulesContent.TextPage (_, ls) -> ls, [||], [||]
+            | RulesContent.VisualPage (_, cs, cps) -> [||], List.toArray cs, List.toArray cps
+
         // Body text (max 14 lines)
-        let lines = RulesContent.pageLines AppState.rulesPage
         let lineH = 16.0f
         let startY = 118.0f
 
@@ -1958,12 +2064,50 @@ type KasinoDispatcher () =
                     elif lines[i] = "" then color 0.0f 0.0f 0.0f 0.0f
                     else Clr.white
                 World.doText name
-                    [Entity.Position .= v3 0.0f (startY - float32 i * lineH) 0.0f
-                     Entity.Size .= v3 520.0f 18.0f 0.0f
+                    [Entity.Position @= v3 0.0f (startY - float32 i * lineH) 0.0f
+                     Entity.Size @= v3 520.0f 18.0f 0.0f
                      Entity.Text @= lines[i]
                      Entity.TextColor @= lineColor
-                     Entity.Justification .= Justified (JustifyLeft, JustifyMiddle)
-                     Entity.FontSizing .= Some 13.0f
+                     Entity.Justification @= Justified (JustifyLeft, JustifyMiddle)
+                     Entity.FontSizing @= Some 13.0f
+                     Entity.Visible @= true
+                     Entity.Elevation .= 1.0f] world
+            else
+                World.doText name
+                    [Entity.Visible @= false
+                     Entity.Elevation .= 1.0f] world
+
+        // Visual-page card images (max 12)
+        for i in 0 .. 11 do
+            let name = $"RuCard{i}"
+            if i < cardSpots.Length then
+                let spot = cardSpots[i]
+                World.doStaticSprite name
+                    [Entity.Position @= v3 spot.X spot.Y 0.0f
+                     Entity.Size @= v3 38.0f 49.0f 0.0f
+                     Entity.StaticImage @= CardImg.cardAsset spot.Card
+                     Entity.Color @= Clr.white
+                     Entity.Visible @= true
+                     Entity.Elevation .= 1.0f] world |> ignore
+            else
+                World.doStaticSprite name
+                    [Entity.Visible @= false
+                     Entity.Elevation .= 1.0f] world |> ignore
+
+        // Visual-page captions (max 12)
+        for i in 0 .. 11 do
+            let name = $"RuCap{i}"
+            if i < caps.Length then
+                let cap = caps[i]
+                let justH = if cap.Center then JustifyCenter else JustifyLeft
+                let posX = if cap.Center then cap.X else cap.X + cap.W / 2.0f
+                World.doText name
+                    [Entity.Position @= v3 posX cap.Y 0.0f
+                     Entity.Size @= v3 cap.W 18.0f 0.0f
+                     Entity.Text @= cap.Text
+                     Entity.TextColor @= cap.Col
+                     Entity.Justification @= Justified (justH, JustifyMiddle)
+                     Entity.FontSizing @= Some cap.Size
                      Entity.Visible @= true
                      Entity.Elevation .= 1.0f] world
             else
