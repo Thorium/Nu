@@ -141,46 +141,64 @@ module Cards =
         let count = min n (List.length deck)
         List.splitAt count deck
 
+    /// Direct, per-card points: 10♦ = 2, 2♠ = 1, each Ace = 1.
+    let directValue (card: Card) : float =
+        if isDiamondTen card then 2.0
+        elif isSpadeTwo card then 1.0
+        elif isAce card then 1.0
+        else 0.0
+
     /// Static scoring value of a captured card.
     /// Combines direct points with fractional contributions toward
     /// "most cards" (1pt / 52 cards) and "most spades" (2pts / 13 spades).
     let scoringValue (card: Card) : float =
-        let direct =
-            if isDiamondTen card then 2.0
-            elif isSpadeTwo card then 1.0
-            elif isAce card then 1.0
-            else 0.0
         let cardFrac = 1.0 / 52.0
         let spadeFrac = if isSpade card then 2.0 / 13.0 else 0.0
-        direct + cardFrac + spadeFrac
+        directValue card + cardFrac + spadeFrac
 
-    /// Context-aware scoring value considering the race for "most cards/spades".
+    /// Likelihood-weighted value of leading the "most cards" / "most spades"
+    /// races, modelled as logistic sigmoids over the current lead. Used as a
+    /// per-card heuristic when choosing which single card to play (it is NOT
+    /// summed across a capture — see captureRaceValue for that).
+    let private cardRaceMargin (cardGap: float) (cardsRemaining: int) =
+        if cardsRemaining <= 0 then
+            if cardGap >= 1.0 then 1.0 else 0.0
+        else
+            let half = float cardsRemaining / 2.0
+            1.0 / (1.0 + exp (-(cardGap / half) * 3.0))
+
+    let private spadeRaceMargin (spadeGap: float) (cardsRemaining: int) =
+        let spadesRem = max 1 (cardsRemaining / 4)
+        let half = float spadesRem / 2.0
+        2.0 / (1.0 + exp (-(spadeGap / half) * 3.0))
+
+    /// Context-aware scoring value of a single card, considering the race for
+    /// "most cards/spades". Suitable for ranking individual hand cards.
     let scoringValueInContext
         (myCards: int) (mySpades: int)
         (opponentCards: int) (opponentSpades: int)
         (cardsRemaining: int)
         (card: Card) : float =
 
-        let direct =
-            if isDiamondTen card then 2.0
-            elif isSpadeTwo card then 1.0
-            elif isAce card then 1.0
-            else 0.0
-
-        let cardGap = float (myCards + 1 - opponentCards)
-        let cardMargin =
-            if cardsRemaining <= 0 then
-                if cardGap >= 1.0 then 1.0 else 0.0
-            else
-                let half = float cardsRemaining / 2.0
-                1.0 / (1.0 + exp (-(cardGap / half) * 3.0))
-
+        let cardMargin = cardRaceMargin (float (myCards + 1 - opponentCards)) cardsRemaining
         let spadeMargin =
-            if isSpade card then
-                let spadeGap = float (mySpades + 1 - opponentSpades)
-                let spadesRem = max 1 (cardsRemaining / 4)
-                let half = float spadesRem / 2.0
-                2.0 / (1.0 + exp (-(spadeGap / half) * 3.0))
+            if isSpade card then spadeRaceMargin (float (mySpades + 1 - opponentSpades)) cardsRemaining
             else 0.0
+        directValue card + cardMargin + spadeMargin
 
-        direct + cardMargin + spadeMargin
+    /// Context-aware value of an entire capture. The "most cards" and "most
+    /// spades" race bonuses (worth 1 and 2 points for the whole round) are
+    /// counted ONCE here — based on the totals after the capture — rather than
+    /// per captured card, which would multiply a single-point race many times.
+    let captureRaceValue
+        (myCards: int) (mySpades: int)
+        (opponentCards: int) (opponentSpades: int)
+        (cardsRemaining: int)
+        (capturedCards: int) (capturedSpades: int) : float =
+
+        // The played hand card also lands in the pile, hence the +1.
+        let cardMargin = cardRaceMargin (float (myCards + capturedCards + 1 - opponentCards)) cardsRemaining
+        let spadeMargin =
+            if capturedSpades > 0 then spadeRaceMargin (float (mySpades + capturedSpades - opponentSpades)) cardsRemaining
+            else 0.0
+        cardMargin + spadeMargin

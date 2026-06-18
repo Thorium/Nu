@@ -26,6 +26,13 @@ module AI =
           CaptureOptions: Rules.CaptureOption list
           ChosenOption: Rules.CaptureOption option }
 
+    /// Personality play style. Balanced reproduces the default optimal play;
+    /// the others only re-rank how captures are chosen (see chooseBestStyled).
+    type PlayStyle =
+        | Balanced
+        | Aggressive   // grabs as many cards/spades as possible
+        | Cautious     // secures direct points, holds cards back
+
     // ── Evaluation helpers ──────────────────────────────────
 
     let private evaluateOption (handCard: Card) (option: Rules.CaptureOption) (tableCards: Card list) : PlayEvaluation =
@@ -47,14 +54,19 @@ module AI =
         let result, _ = Rules.resolveCapture handCard option tableCards
         match result with
         | Capture(_, captured, isSweep) ->
-            let scoreFn =
-                Cards.scoringValueInContext
+            // Direct points sum per card; the most-cards/most-spades race
+            // bonuses are counted once for the whole capture (not per card).
+            let directPts = captured |> List.sumBy Cards.directValue
+            let capturedSpades = captured |> List.filter Cards.isSpade |> List.length
+            let raceBonus =
+                Cards.captureRaceValue
                     ctx.MyCards ctx.MySpades
                     ctx.OpponentCards ctx.OpponentSpades
                     ctx.CardsRemaining
+                    captured.Length capturedSpades
             { HandCard       = handCard
               Result         = result
-              PointValue     = (captured |> List.sumBy scoreFn) + (if isSweep then Rules.sweepBonus else 0.0)
+              PointValue     = directPts + raceBonus + (if isSweep then Rules.sweepBonus else 0.0)
               CardsCaptured  = captured.Length
               IsSweep        = isSweep
               CaptureOptions = []
@@ -134,3 +146,33 @@ module AI =
         match variant with
         | StandardKasino -> chooseBestStandard ctx hand tableCards
         | LaistoKasino   -> chooseBestLaisto ctx hand tableCards
+
+    /// Standard-variant chooser with a personality bias on how captures are
+    /// ranked. The no-capture fallback (shed the least valuable card) is shared
+    /// with Balanced so a styled AI never plays an outright bad lead.
+    let private chooseBestStandardStyled (style: PlayStyle) (ctx: GameContext) (hand: Card list) (tableCards: Card list) =
+        let evals = hand |> List.map (fun c -> evaluatePlayInContext ctx StandardKasino c tableCards)
+        let captures = evals |> List.filter (fun e -> e.CardsCaptured > 0)
+        if not (List.isEmpty captures) then
+            match style with
+            | Balanced ->
+                captures |> List.maxBy (fun e -> (e.PointValue, float e.CardsCaptured, (if e.IsSweep then 1.0 else 0.0)))
+            | Aggressive ->
+                // Prefer hauling in the most cards (and sweeps) over raw points.
+                captures |> List.maxBy (fun e -> (float e.CardsCaptured, (if e.IsSweep then 1.0 else 0.0), e.PointValue))
+            | Cautious ->
+                // Prefer the highest-scoring capture but take fewer cards when tied.
+                captures |> List.maxBy (fun e -> (e.PointValue, (if e.IsSweep then 1.0 else 0.0), -(float e.CardsCaptured)))
+        else
+            let scoreFn = Cards.scoringValueInContext ctx.MyCards ctx.MySpades ctx.OpponentCards ctx.OpponentSpades ctx.CardsRemaining
+            evals |> List.minBy (fun e -> (scoreFn e.HandCard, float (Cards.tableValue e.HandCard.Rank)))
+
+    /// Choose the best play for a given personality style. Balanced reproduces
+    /// chooseBest exactly; other styles only affect Standard Kasino capture
+    /// preference (Laisto keeps the balanced minimizing strategy, which is hard
+    /// to vary without weakening play).
+    let chooseBestStyled (style: PlayStyle) (variant: GameVariant) (ctx: GameContext) (hand: Card list) (tableCards: Card list) =
+        match variant, style with
+        | StandardKasino, Balanced -> chooseBestStandard ctx hand tableCards
+        | StandardKasino, _        -> chooseBestStandardStyled style ctx hand tableCards
+        | LaistoKasino, _          -> chooseBestLaisto ctx hand tableCards

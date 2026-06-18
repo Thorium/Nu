@@ -41,20 +41,28 @@ module Rules =
 
             let results = System.Collections.Generic.List<int list>()
 
+            // For pathological tables (many low cards) the number of maximal
+            // independent sets can explode into the tens of thousands. Such a
+            // modal would be both unusably long and slow to enumerate, so we
+            // stop once a generous cap is reached; real play needs only a few.
+            let maxOptions = 64
+
             // Bron-Kerbosch: maximal independent sets in the conflict graph
             let rec bronKerbosch (r: Set<int>) (p: Set<int>) (x: Set<int>) =
-                if Set.isEmpty p && Set.isEmpty x then
+                if results.Count >= maxOptions then ()
+                elif Set.isEmpty p && Set.isEmpty x then
                     results.Add(Set.toList r)
                 else
                     let mutable pMut = p
                     let mutable xMut = x
                     for v in Set.toList p do
-                        let nbrs = conflicts[v]
-                        let newP = pMut |> Set.remove v |> Set.filter (fun u -> not (Set.contains u nbrs))
-                        let newX = xMut |> Set.filter (fun u -> not (Set.contains u nbrs))
-                        bronKerbosch (Set.add v r) newP newX
-                        pMut <- Set.remove v pMut
-                        xMut <- Set.add v xMut
+                        if results.Count < maxOptions then
+                            let nbrs = conflicts[v]
+                            let newP = pMut |> Set.remove v |> Set.filter (fun u -> not (Set.contains u nbrs))
+                            let newX = xMut |> Set.filter (fun u -> not (Set.contains u nbrs))
+                            bronKerbosch (Set.add v r) newP newX
+                            pMut <- Set.remove v pMut
+                            xMut <- Set.add v xMut
 
             bronKerbosch Set.empty (set [ 0 .. n - 1 ]) Set.empty
 
@@ -93,10 +101,13 @@ module Rules =
             let isSweep = List.isEmpty newTable
             (Capture(handCard, single.Captured, isSweep), newTable, options)
         | _ ->
-            let first = options.Head
-            let newTable = tableCards |> List.filter (fun c -> not (List.contains c first.Captured))
+            // Multiple overlapping options: default to the largest capture,
+            // matching getCapturedCards. (UIs intercept this case and let the
+            // player choose; this keeps any direct caller consistent.)
+            let chosen = options |> List.maxBy (fun opt -> opt.Captured.Length)
+            let newTable = tableCards |> List.filter (fun c -> not (List.contains c chosen.Captured))
             let isSweep = List.isEmpty newTable
-            (Capture(handCard, first.Captured, isSweep), newTable, options)
+            (Capture(handCard, chosen.Captured, isSweep), newTable, options)
 
     /// Resolve a specific capture option chosen by the player.
     let resolveCapture (handCard: Card) (option: CaptureOption) (tableCards: Card list) : PlayResult * Card list =

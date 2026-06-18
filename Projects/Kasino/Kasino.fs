@@ -92,9 +92,15 @@ module AppState =
     let mutable menuPlayerCount = 2
     let mutable menuHumanCount = 1
 
+    /// Player-configurable options. AI personalities + table-talk default ON
+    /// here (the ported flavour features); toggled from the menu before a game.
+    let mutable menuSettings : Settings.GameSettings =
+        { Settings.defaultSettings with AiPersonalities = true; ChatEnabled = true }
+
     // Game state
     let mutable config : GameEngine.GameConfig =
-        { Variant = StandardKasino; PlayerCount = 2; HumanCount = 1; Seed = None; TargetScore = 16 }
+        { Variant = StandardKasino; PlayerCount = 2; HumanCount = 1
+          Seed = None; TargetScore = 16; Settings = menuSettings }
     let mutable gameState : GameEngine.GameState option = None
     let mutable phase = Dealing
     let mutable phaseTimer = 0.0f
@@ -104,10 +110,17 @@ module AppState =
     let mutable captureOptions : Rules.CaptureOption list = []
     let mutable captureCardIdx = 0
     let mutable lastPlayMessage = ""
+    /// Latest table-talk line from a computer player (empty = none shown).
+    let mutable lastChat = ""
     let mutable roundNumber = 1
     let mutable cumulativeScores : Map<string, int> = Map.empty
     let mutable rng = Random()
     let mutable lastEval : AI.PlayEvaluation option = None
+
+    /// Number of available card-back designs (back1.png .. backN.png)
+    let backDesignCount = 3
+    /// Asset name of the card back chosen for the current game (one of back1..backN)
+    let mutable currentBack = "back1"
 
     // Layout & drag state
     let mutable tableLayout = RandomScatter
@@ -151,8 +164,16 @@ module AppState =
     /// Start a new game from current menu settings
     let startGame () =
         config <- { Variant = menuVariant; PlayerCount = menuPlayerCount
-                    HumanCount = menuHumanCount; Seed = None; TargetScore = 16 }
+                    HumanCount = menuHumanCount; Seed = None; TargetScore = 16
+                    Settings = menuSettings }
         rng <- Random()
+        // Pick a random card-back design for this game (back1..backN), or back1
+        // if random backs are disabled. Chosen once per game (whole deck).
+        currentBack <-
+            if menuSettings.RandomCardBacks then $"back{rng.Next(backDesignCount) + 1}"
+            else "back1"
+        tableLayout <- if menuSettings.DefaultScatter then RandomScatter else StrictGrid
+        lastChat <- ""
         let players = GameEngine.createPlayers config
         cumulativeScores <- players |> List.map (fun p -> p.Name, 0) |> Map.ofList
         roundNumber <- 1
@@ -238,9 +259,9 @@ module CardImg =
     let cardAsset (card: Card) : Image AssetTag =
         asset<Image> "Default" ($"{suitPrefix card.Suit}{rankSuffix card.Rank}")
 
-    /// Card back image
-    let backAsset : Image AssetTag =
-        asset<Image> "Default" "back"
+    /// Card back image for the current game (randomly chosen back design)
+    let backAsset () : Image AssetTag =
+        asset<Image> "Default" AppState.currentBack
 
     /// Table felt background image
     let tableBgAsset : Image AssetTag =
@@ -529,6 +550,7 @@ module Helpers =
                 let msg = formatPlayResult player.Name turnResult.PlayResult
                 AppState.gameState <- Some turnResult.NewState
                 AppState.lastPlayMessage <- msg
+                AppState.lastChat <- ""
                 AppState.selectedCardIndex <- None
                 AppState.lastEval <- Some turnResult.Evaluation
                 AppState.phase <- AnimatingPlay
@@ -556,6 +578,7 @@ module Helpers =
             let msg = formatPlayResult player.Name turnResult.PlayResult
             AppState.gameState <- Some turnResult.NewState
             AppState.lastPlayMessage <- msg
+            AppState.lastChat <- ""
             AppState.selectedCardIndex <- None
             AppState.lastEval <- Some turnResult.Evaluation
             AppState.phase <- AnimatingPlay
@@ -827,6 +850,23 @@ type KasinoDispatcher () =
             AppState.startGame ()
             game.SetKasinoMode KasinoPlaying world
 
+        // ── Flavour toggles (visible only on HumanCountSelect) ──
+        if World.doButton "BtnTogglePers"
+            [Entity.Position .= v3 0.0f (Ly.menuBaseY - 2.0f * Ly.btnGap) 0.0f
+             Entity.Size .= v3 Ly.btnW Ly.btnH 0.0f
+             Entity.Text @= (if AppState.menuSettings.AiPersonalities then "AI Personalities: ON" else "AI Personalities: OFF")
+             Entity.Visible @= isHumanCount
+             Entity.Elevation .= 1.0f] world then
+            AppState.menuSettings <- { AppState.menuSettings with AiPersonalities = not AppState.menuSettings.AiPersonalities }
+
+        if World.doButton "BtnToggleChat"
+            [Entity.Position .= v3 0.0f (Ly.menuBaseY - 3.0f * Ly.btnGap) 0.0f
+             Entity.Size .= v3 Ly.btnW Ly.btnH 0.0f
+             Entity.Text @= (if AppState.menuSettings.ChatEnabled then "Table Talk: ON" else "Table Talk: OFF")
+             Entity.Visible @= isHumanCount
+             Entity.Elevation .= 1.0f] world then
+            AppState.menuSettings <- { AppState.menuSettings with ChatEnabled = not AppState.menuSettings.ChatEnabled }
+
         // "How to Play" button on all menu steps
         if World.doButton "BtnRules"
             [Entity.Position .= v3 0.0f -160.0f 0.0f
@@ -965,7 +1005,7 @@ type KasinoDispatcher () =
                     World.doStaticSprite name
                         [Entity.Position @= v3 x Ly.topOppY 0.0f
                          Entity.Size .= v3 Ly.cardW Ly.cardH 0.0f
-                         Entity.StaticImage @= CardImg.backAsset
+                         Entity.StaticImage @= CardImg.backAsset ()
                          Entity.Visible @= true
                          Entity.Elevation .= 1.0f] world |> ignore
                 else
@@ -1001,7 +1041,7 @@ type KasinoDispatcher () =
                     World.doStaticSprite name
                         [Entity.Position @= v3 Ly.sideLeftX y 0.0f
                          Entity.Size .= v3 Ly.cardW Ly.cardH 0.0f
-                         Entity.StaticImage @= CardImg.backAsset
+                         Entity.StaticImage @= CardImg.backAsset ()
                          Entity.Visible @= true
                          Entity.Elevation .= 1.0f] world |> ignore
                 else
@@ -1034,7 +1074,7 @@ type KasinoDispatcher () =
                     World.doStaticSprite name
                         [Entity.Position @= v3 Ly.sideRightX y 0.0f
                          Entity.Size .= v3 Ly.cardW Ly.cardH 0.0f
-                         Entity.StaticImage @= CardImg.backAsset
+                         Entity.StaticImage @= CardImg.backAsset ()
                          Entity.Visible @= true
                          Entity.Elevation .= 1.0f] world |> ignore
                 else
@@ -1074,7 +1114,7 @@ type KasinoDispatcher () =
                     if isHuman || bottomIdx = gs.CurrentPlayerIndex then
                         CardImg.cardAsset card
                     else
-                        CardImg.backAsset
+                        CardImg.backAsset ()
 
                 World.doStaticSprite name
                     [Entity.Position @= v3 x (Ly.handY + yOffset) 0.0f
@@ -1107,7 +1147,7 @@ type KasinoDispatcher () =
                     if isHuman || bottomIdx = gs.CurrentPlayerIndex then
                         CardImg.cardAsset card
                     else
-                        CardImg.backAsset
+                        CardImg.backAsset ()
                 World.doStaticSprite "DragCard"
                     [Entity.Position @= v3 curPos.X curPos.Y 0.0f
                      Entity.Size .= v3 Ly.cardW Ly.cardH 0.0f
@@ -1164,7 +1204,7 @@ type KasinoDispatcher () =
                 World.doStaticSprite name
                     [Entity.Position @= v3 xOff (Ly.tableY + yStack + interleaveY) 0.0f
                      Entity.Size .= v3 Ly.cardW Ly.cardH 0.0f
-                     Entity.StaticImage @= CardImg.backAsset
+                     Entity.StaticImage @= CardImg.backAsset ()
                      Entity.Rotation @= Quaternion.Identity
                      Entity.Visible @= true
                      Entity.Elevation @= (5.0f + float32 si * 0.01f)] world |> ignore
@@ -1191,7 +1231,7 @@ type KasinoDispatcher () =
                     World.doStaticSprite name
                         [Entity.Position @= v3 x y 0.0f
                          Entity.Size .= v3 Ly.cardW Ly.cardH 0.0f
-                         Entity.StaticImage @= CardImg.backAsset
+                         Entity.StaticImage @= CardImg.backAsset ()
                          Entity.Visible @= true
                          Entity.Elevation @= (5.2f + float32 dci * 0.01f)] world |> ignore
                 else
@@ -1212,7 +1252,7 @@ type KasinoDispatcher () =
                 World.doStaticSprite name
                     [Entity.Position @= v3 0.0f (Ly.tableY + offset) 0.0f
                      Entity.Size .= v3 Ly.cardW Ly.cardH 0.0f
-                     Entity.StaticImage @= CardImg.backAsset
+                     Entity.StaticImage @= CardImg.backAsset ()
                      Entity.Visible @= true
                      Entity.Elevation @= (5.0f + float32 dsi * 0.005f)] world |> ignore
             else
@@ -1288,6 +1328,16 @@ type KasinoDispatcher () =
              Entity.FontSizing .= Some 13.0f
              Entity.Elevation .= 3.0f] world
 
+        // ── Table-talk line (computer banter) ─────────────────
+        World.doText "ChatMsg"
+            [Entity.Position .= v3 0.0f (Ly.statusY - 18.0f) 0.0f
+             Entity.Size .= v3 550.0f 18.0f 0.0f
+             Entity.Text @= AppState.lastChat
+             Entity.Justification .= Justified (JustifyCenter, JustifyMiddle)
+             Entity.TextColor .= Clr.gold
+             Entity.FontSizing .= Some 12.0f
+             Entity.Elevation .= 3.0f] world
+
         let turnText =
             match AppState.phase with
             | WaitingForHuman when AppState.selectedCardIndex.IsSome -> ""
@@ -1353,7 +1403,7 @@ type KasinoDispatcher () =
         World.doStaticSprite "DeckIcon"
             [Entity.Position .= v3 Ly.scoreX (infoY - 18.0f) 0.0f
              Entity.Size .= v3 (Ly.cardW * 0.5f) (Ly.cardH * 0.5f) 0.0f
-             Entity.StaticImage .= CardImg.backAsset
+             Entity.StaticImage .= CardImg.backAsset ()
              Entity.Visible .= true
              Entity.Elevation .= 3.0f] world |> ignore
 
@@ -1641,7 +1691,8 @@ type KasinoDispatcher () =
                 AppState.phaseTimer <- AppState.phaseTimer + dt
                 if AppState.phaseTimer >= AppState.computerDelay then
                     let player = gs.Players[gs.CurrentPlayerIndex]
-                    let turnResult = GameEngine.playComputerTurn gs
+                    let style = GameEngine.computerStyle AppState.config gs.CurrentPlayerIndex
+                    let turnResult = GameEngine.playComputerTurnStyled style gs
                     AppState.currentCollectAnim <- Helpers.buildCollectAnimation turnResult.PlayResult false gs.Table
                     // Compute animation target: scatter position for Place, table center for Capture
                     let toX, toY =
@@ -1668,6 +1719,17 @@ type KasinoDispatcher () =
                     AppState.gameState <- Some turnResult.NewState
                     AppState.lastPlayMessage <- msg
                     AppState.lastEval <- Some turnResult.Evaluation
+                    // Table-talk: let the computer banter about what it just did.
+                    if AppState.config.Settings.ChatEnabled then
+                        let mood =
+                            match turnResult.PlayResult with
+                            | Capture(_, _, true)  -> Chat.Sweep
+                            | Capture(_, _, false) -> Chat.Capture
+                            | Place _              -> Chat.Place
+                        let seed = AppState.roundNumber * 97 + List.length turnResult.NewState.Deck
+                        AppState.lastChat <- $"{player.Name}: {Chat.pick seed mood}"
+                    else
+                        AppState.lastChat <- ""
                     AppState.phase <- AnimatingPlay
                     AppState.phaseTimer <- 0.0f
 

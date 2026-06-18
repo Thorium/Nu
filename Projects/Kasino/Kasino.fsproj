@@ -53,6 +53,7 @@
 		<Compile Include="Rules.fs" />
 		<Compile Include="Scoring.fs" />
 		<Compile Include="AI.fs" />
+		<Compile Include="Settings.fs" />
 		<Compile Include="GameEngine.fs" />
 		<Compile Include="Kasino.fs" />
 		<Compile Include="KasinoPlugin.fs" />
