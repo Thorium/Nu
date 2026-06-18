@@ -128,6 +128,14 @@ module Engine =
               (* Entity Properties *)
               "Facets"
               "Surnames"
+              "RotationMatrix"
+              "Angles"
+              "AnglesLocal"
+              "Degrees"
+              "DegreesLocal"
+              "AffineMatrix"
+              "PerimeterUnscaled"
+              "Perimeter"
               "PerimeterCenter"
               "PerimeterBottom"
               "PerimeterBottomLeft"
@@ -138,14 +146,6 @@ module Engine =
               "PerimeterBottomLeftLocal"
               "PerimeterMinLocal"
               "PerimeterMaxLocal"
-              "RotationMatrix"
-              "Angles"
-              "AnglesLocal"
-              "Degrees"
-              "DegreesLocal"
-              "AffineMatrix"
-              "PerimeterUnscaled"
-              "Perimeter"
               "Bounds"
               "Imperative"
               "PresenceOverride"
@@ -203,7 +203,7 @@ module Render =
     let [<Uniform>] mutable TextureMinimalMipmapIndex = match ConfigurationManager.AppSettings["TextureMinimalMipmapIndex"] with null -> 2 | value -> scvalue value
     let [<Uniform>] mutable TextureBlockCompression = match ConfigurationManager.AppSettings["TextureBlockCompression"] with null -> BcCompression | value -> scvalue value
     let [<Literal>] SpriteBatchSize = 192 // NOTE: remember to update SPRITE_BATCH_SIZE in shaders when changing this!
-    let [<Literal>] SpriteBorderTexelScalar = 0.005f
+    let [<Literal>] SpriteBorderTexelScalar = 0.001f
     let [<Literal>] SpriteMessagesPrealloc = 256
     let [<Literal>] StaticModelMessagesPrealloc = 256
     let [<Literal>] StaticModelSurfaceMessagesPrealloc = 256
@@ -319,7 +319,7 @@ module Render =
     let [<Uniform>] DepthOfFieldFocalPointDefault = Vector2.Zero
     let [<Literal>] ChromaticAberrationEnabledGlobalDefault = true
     let [<Literal>] ChromaticAberrationEnabledLocalDefault = false
-    let [<Uniform>] ChromaticAberrationChannelOffsetsDefault = Vector3 (0.006f, 0.004f, -0.004f)
+    let [<Uniform>] ChromaticAberrationChannelOffsetsDefault = Vector3 (0.003f, 0.002f, -0.002f)
     let [<Uniform>] ChromaticAberrationFocalPointDefault = Vector2.Zero
     let [<Literal>] FxaaEnabledDefault = true
     let [<Literal>] FxaaSpanMaxDefault = 16.0f
@@ -382,7 +382,6 @@ module Physics =
     let [<Uniform>] mutable Collision3dJobsMax = match ConfigurationManager.AppSettings["Collision3dJobsMax"] with null -> 128 | value -> scvalue value
     let [<Uniform>] mutable Collision3dBodyUnoptimizedCreationMax = 128 * 3 // NOTE: related to https://github.com/jrouwe/JoltPhysics/issues/1520#issuecomment-2667060129
     let [<Uniform>] mutable GroundAngleMax = match ConfigurationManager.AppSettings["GroundAngleMax"] with null -> MathF.PI_OVER_4 | value -> scvalue value
-    let [<Uniform>] mutable FluidParticleScale = 640.0f / 2400.0f // HACK: sfml-box2d-fluid is in 2400×1350 while Nu is in 640×360, this scaling brings more appropriate behavior.
     let [<Uniform>] internal BroadPhaseLayerNonMoving = byte 0
     let [<Uniform>] internal BroadPhaseLayerMoving = byte 1
     let [<Uniform>] internal ObjectLayerNonMoving = JoltPhysicsSharp.ObjectLayer 0u
