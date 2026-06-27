@@ -181,11 +181,11 @@ type FsHockeyDispatcher () =
         World.endGroup world
         World.endScreen world
 
-        // handle Alt+F4 when not in editor
-        if  World.isKeyboardAltDown world &&
-            World.isKeyboardKeyDown KeyboardKey.F4 world &&
-            world.Unaccompanied then
-            World.exit world
+        // when not in editor, handle the close-window button or Alt+F4
+        if world.Unaccompanied then
+            if  World.doSubscriptionAny "Exit" game.ExitRequestEvent world ||
+                World.isKeyboardAltDown world && World.isKeyboardKeyDown KeyboardKey.F4 world then
+                World.exit world
 
     // ─── MENU SCREEN ──────────────────────────────────────────────
     static member RenderMenu (game : Game, world : World) =
@@ -346,19 +346,21 @@ type FsHockeyDispatcher () =
         // ─── Update Input ───
         if world.Advancing then
             // Player 1: Arrow keys + RShift/Enter
-            gs.KeyLeft1 <- World.isKeyboardKeyDown KeyboardKey.Left world
-            gs.KeyRight1 <- World.isKeyboardKeyDown KeyboardKey.Right world
-            gs.KeyUp1 <- World.isKeyboardKeyDown KeyboardKey.Up world
-            gs.KeyDown1 <- World.isKeyboardKeyDown KeyboardKey.Down world
-            gs.KeyFire1 <- World.isKeyboardKeyDown KeyboardKey.RShift world || World.isKeyboardKeyDown KeyboardKey.Enter world
+            gs.Input1 <-
+                { Left = World.isKeyboardKeyDown KeyboardKey.Left world
+                  Right = World.isKeyboardKeyDown KeyboardKey.Right world
+                  Up = World.isKeyboardKeyDown KeyboardKey.Up world
+                  Down = World.isKeyboardKeyDown KeyboardKey.Down world
+                  Fire = World.isKeyboardKeyDown KeyboardKey.RShift world || World.isKeyboardKeyDown KeyboardKey.Enter world }
 
             // Player 2: WASD + Space/Tab (only in exhibition)
             if not leagueMode then
-                gs.KeyLeft2 <- World.isKeyboardKeyDown KeyboardKey.A world
-                gs.KeyRight2 <- World.isKeyboardKeyDown KeyboardKey.D world
-                gs.KeyUp2 <- World.isKeyboardKeyDown KeyboardKey.W world
-                gs.KeyDown2 <- World.isKeyboardKeyDown KeyboardKey.S world
-                gs.KeyFire2 <- World.isKeyboardKeyDown KeyboardKey.Space world || World.isKeyboardKeyDown KeyboardKey.Tab world
+                gs.Input2 <-
+                    { Left = World.isKeyboardKeyDown KeyboardKey.A world
+                      Right = World.isKeyboardKeyDown KeyboardKey.D world
+                      Up = World.isKeyboardKeyDown KeyboardKey.W world
+                      Down = World.isKeyboardKeyDown KeyboardKey.S world
+                      Fire = World.isKeyboardKeyDown KeyboardKey.Space world || World.isKeyboardKeyDown KeyboardKey.Tab world }
 
             // Run physics ticks (1 per frame for Nu's ~60fps, not PhysicsTicksPerFrame=2 which was for 30fps WinForms)
             gameTick gs

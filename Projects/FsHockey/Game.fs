@@ -44,6 +44,14 @@ type PlayerRole =
     | Forward
     | Wing
 
+/// One player's directional + fire input for the current tick.
+[<Struct>]
+type Input =
+    { Left: bool; Right: bool; Up: bool; Down: bool; Fire: bool }
+
+module Input =
+    let none = { Left = false; Right = false; Up = false; Down = false; Fire = false }
+
 // ─── League / Tournament Types ─────────────────────────────────────────
 
 type TeamStats =
@@ -89,22 +97,10 @@ type GameState =
       mutable NumPeriods: int
       // Dynamic player layout
       mutable PlayersPerTeam: int
-      mutable NumPlayers: int
-      mutable BallIdx: int
-      mutable NumEntities: int
-      mutable Team2Start: int
       mutable FivePlayerMode: bool
-      // Keyboard state
-      mutable KeyLeft1: bool
-      mutable KeyRight1: bool
-      mutable KeyUp1: bool
-      mutable KeyDown1: bool
-      mutable KeyFire1: bool
-      mutable KeyLeft2: bool
-      mutable KeyRight2: bool
-      mutable KeyUp2: bool
-      mutable KeyDown2: bool
-      mutable KeyFire2: bool
+      // Keyboard state (one input snapshot per player)
+      mutable Input1: Input
+      mutable Input2: Input
       // Shoot charge
       mutable FireHoldTicks1: int<tick>
       mutable FireHoldTicks2: int<tick>
@@ -117,6 +113,13 @@ type GameState =
       PrevDirX: float array            // previous direction per entity
       PrevDirY: float array }
 
+    // Layout derived from the team size. Computed members rather than stored
+    // fields so they cannot drift out of sync with PlayersPerTeam.
+    member s.NumPlayers = s.PlayersPerTeam * 2
+    member s.Team2Start = s.PlayersPerTeam
+    member s.BallIdx = s.PlayersPerTeam * 2
+    member s.NumEntities = s.PlayersPerTeam * 2 + 1
+
 // ─── Helpers ───────────────────────────────────────────────────────────
 
 let inline private zero<[<Measure>] 'u> =
@@ -126,10 +129,11 @@ let private zeroVel = 0.0<subpx / tick>
 
 /// Determine the role of a local player index in the current mode
 let playerRole (fivePlayer: bool) (localIdx: int) =
-    if not fivePlayer then Forward
-    elif localIdx = 0 then Goalie
-    elif localIdx >= 3 && localIdx <= 4 then Wing
-    else Forward                       // indices 1, 2, 5 = forwards
+    match fivePlayer, localIdx with
+    | false, _      -> Forward
+    | true, 0       -> Goalie
+    | true, (3 | 4) -> Wing
+    | true, _       -> Forward          // indices 1, 2, 5 = forwards
 
 /// Is the entity on team 1?
 let inline isOnTeam1 (gs: GameState) idx = idx < gs.Team2Start
@@ -145,14 +149,7 @@ let teamOwnsBall (gs: GameState) isTeam1 =
     | Free -> false
 
 /// Does the opponent team own the ball?
-let opponentOwnsBall (gs: GameState) isTeam1 =
-    match gs.BallState with
-    | HeldBy owner ->
-        if isTeam1 then
-            not (isOnTeam1 gs owner)
-        else
-            isOnTeam1 gs owner
-    | Free -> false
+let opponentOwnsBall (gs: GameState) isTeam1 = teamOwnsBall gs (not isTeam1)
 
 /// Sign-based velocity from a direction component
 let inline private dirToVel (dir: float) (power: float<subpx / tick>) =
@@ -175,7 +172,6 @@ let createEntity maxSpd accel shotPwr : Entity =
 
 let createGameState () : GameState =
     let ppt = PlayersPerTeam3
-    let np = ppt * 2
 
     let ents =
         Array.init MaxEntities (fun i ->
@@ -208,21 +204,9 @@ let createGameState () : GameState =
       CurrentPeriod = 0
       NumPeriods = ExhibitionPeriods
       PlayersPerTeam = ppt
-      NumPlayers = np
-      BallIdx = np
-      NumEntities = np + 1
-      Team2Start = ppt
       FivePlayerMode = false
-      KeyLeft1 = false
-      KeyRight1 = false
-      KeyUp1 = false
-      KeyDown1 = false
-      KeyFire1 = false
-      KeyLeft2 = false
-      KeyRight2 = false
-      KeyUp2 = false
-      KeyDown2 = false
-      KeyFire2 = false
+      Input1 = Input.none
+      Input2 = Input.none
       FireHoldTicks1 = 0<tick>
       FireHoldTicks2 = 0<tick>
       StickAnimTimers = Array.zeroCreate MaxEntities
@@ -237,10 +221,6 @@ let createGameState () : GameState =
 let setPlayerMode (gs: GameState) fivePlayer =
     let ppt = if fivePlayer then PlayersPerTeam5 else PlayersPerTeam3
     gs.PlayersPerTeam <- ppt
-    gs.NumPlayers <- ppt * 2
-    gs.BallIdx <- ppt * 2
-    gs.NumEntities <- ppt * 2 + 1
-    gs.Team2Start <- ppt
     gs.FivePlayerMode <- fivePlayer
     // Ensure ball entity has correct stats
     let ball = gs.Entities[gs.BallIdx]
@@ -412,24 +392,24 @@ let checkWallsAndGoals (gs: GameState) idx =
 
 // ─── Human Input ───────────────────────────────────────────────────────
 
-let applyHumanInput (gs: GameState) idx left right up down fire (fireHoldTicks: int<tick> byref) =
+let applyHumanInput (gs: GameState) idx (input: Input) (fireHoldTicks: int<tick> byref) =
     let ent = gs.Entities[idx]
     let mutable dx = 0.0
     let mutable dy = 0.0
 
-    if left then
+    if input.Left then
         ent.VelX <- ent.VelX - ent.Accel
         dx <- -1.0
 
-    if right then
+    if input.Right then
         ent.VelX <- ent.VelX + ent.Accel
         dx <- 1.0
 
-    if up then
+    if input.Up then
         ent.VelY <- ent.VelY - ent.Accel
         dy <- -1.0
 
-    if down then
+    if input.Down then
         ent.VelY <- ent.VelY + ent.Accel
         dy <- 1.0
 
@@ -442,7 +422,7 @@ let applyHumanInput (gs: GameState) idx left right up down fire (fireHoldTicks: 
     // Charge mechanic: hold fire key for harder shot, release to fire
     match gs.BallState with
     | HeldBy owner when owner = idx ->
-        if fire then
+        if input.Fire then
             fireHoldTicks <- fireHoldTicks + 1<tick>
         elif fireHoldTicks > 0<tick> then
             let t = float (int fireHoldTicks) / float (int ChargeTicksForFull)
@@ -702,11 +682,7 @@ let private processTeam
     isTeam1
     teamIdx
     activeIdx
-    keyL
-    keyR
-    keyU
-    keyD
-    keyF
+    (input: Input)
     (holdTicks: int<tick> byref)
     =
     let ppt = gs.PlayersPerTeam
@@ -721,7 +697,7 @@ let private processTeam
         | Goalie -> aiGoalie gs ei isTeam1
         | _ when ei = activeIdx ->
             if teamIdx = 0 then
-                applyHumanInput gs ei keyL keyR keyU keyD keyF &holdTicks
+                applyHumanInput gs ei input &holdTicks
             else
                 aiActivePlayer gs ei isTeam1
         | Wing -> aiWing gs ei isTeam1
@@ -765,11 +741,7 @@ let gameTick (gs: GameState) =
                 true
                 gs.Team1Idx
                 gs.ActivePlayer1
-                gs.KeyLeft1
-                gs.KeyRight1
-                gs.KeyUp1
-                gs.KeyDown1
-                gs.KeyFire1
+                gs.Input1
                 &gs.FireHoldTicks1
 
             processTeam
@@ -777,11 +749,7 @@ let gameTick (gs: GameState) =
                 false
                 gs.Team2Idx
                 gs.ActivePlayer2
-                gs.KeyLeft2
-                gs.KeyRight2
-                gs.KeyUp2
-                gs.KeyDown2
-                gs.KeyFire2
+                gs.Input2
                 &gs.FireHoldTicks2
 
             // Possession timer — auto-shoot when it expires
