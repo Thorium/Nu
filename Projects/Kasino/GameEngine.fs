@@ -9,10 +9,36 @@ open System
 
 module GameEngine =
 
+    /// Number of seats at the table. Kasino deals its 52 cards evenly only for
+    /// 2–4 players, so the supported counts are encoded as a closed type — an
+    /// illegal seat count is simply unrepresentable.
+    [<Struct>]
+    type SeatCount =
+        | Two
+        | Three
+        | Four
+
+    module SeatCount =
+        /// The integer number of players.
+        let count = function Two -> 2 | Three -> 3 | Four -> 4
+
+        /// Parse a player count; None for anything outside the supported 2–4.
+        let ofInt = function 2 -> Some Two | 3 -> Some Three | 4 -> Some Four | _ -> None
+
+        /// Parse a player count, defaulting to a 2-player game for any value
+        /// outside 2–4. Used at trusted boundaries (the menus already constrain
+        /// the choice to 2–4); the default only guards a programming slip.
+        let ofIntOrDefault n = ofInt n |> Option.defaultValue Two
+
+        /// Deal rounds for the game. The first deal gives each player 4 cards and
+        /// puts 4 on the table; the remaining 48 − 4·players cards are dealt 4 at
+        /// a time. Exhaustive over the supported counts — no silent integer division.
+        let dealRounds = function Two -> 6 | Three -> 4 | Four -> 3
+
     /// Game configuration
     type GameConfig =
         { Variant: GameVariant
-          PlayerCount: int
+          Seats: SeatCount
           HumanCount: int
           Seed: int option
           TargetScore: int
@@ -35,21 +61,11 @@ module GameEngine =
           PlayResult: PlayResult
           Evaluation: AI.PlayEvaluation }
 
-    /// Total deal rounds based on player count.
-    /// 52 cards: first deal = 4*players + 4 table, rest = 4*players each.
-    /// Only 2-4 players divide the 48 dealt cards evenly; other counts fall
-    /// back to integer division (guarded against divide-by-zero).
-    let totalDealRounds (playerCount: int) =
-        match playerCount with
-        | 2 -> 6
-        | 3 -> 4
-        | 4 -> 3
-        | n -> 12 / max 1 n
-
     /// Create initial players.
     let createPlayers (config: GameConfig) =
-        let cpuCount = config.PlayerCount - config.HumanCount
-        [ for i in 0 .. config.PlayerCount - 1 do
+        let playerCount = SeatCount.count config.Seats
+        let cpuCount = playerCount - config.HumanCount
+        [ for i in 0 .. playerCount - 1 do
             if i < config.HumanCount then
                 let humanName = if config.HumanCount > 1 then $"Pelaaja {i + 1}" else "Pelaaja"
                 { Name = humanName; Type = Human; Hand = []; CapturedCards = []; Sweeps = 0 }
@@ -122,6 +138,38 @@ module GameEngine =
           OpponentCards = opponentCards; OpponentSpades = opponentSpades
           CardsRemaining = cardsRemaining }
 
+    /// Apply a resolved play (the played card + its Capture/Place result) to the
+    /// state: update the acting player's hand and captures, advance the turn, and
+    /// carry the last-capturer marker. Shared by the computer and human paths.
+    let private applyPlay
+        (state: GameState) (idx: int) (playedCard: Card)
+        (remainingHand: Card list) (result: PlayResult) (newTable: Card list)
+        (eval: AI.PlayEvaluation) : TurnResult =
+        let player = state.Players[idx]
+        let updatedPlayer =
+            match result with
+            | Capture(_, captured, isSweep) ->
+                { player with
+                    Hand = remainingHand
+                    CapturedCards = player.CapturedCards @ (playedCard :: captured)
+                    Sweeps = player.Sweeps + (if isSweep then 1 else 0) }
+            | Place _ ->
+                { player with Hand = remainingHand }
+        let updatedPlayers =
+            state.Players |> List.mapi (fun i p -> if i = idx then updatedPlayer else p)
+        let lastCapturer =
+            match result with
+            | Capture _ -> Some idx
+            | Place _   -> state.LastCapturer
+        { NewState =
+            { state with
+                Players = updatedPlayers
+                Table = newTable
+                CurrentPlayerIndex = (idx + 1) % state.Players.Length
+                LastCapturer = lastCapturer }
+          PlayResult = result
+          Evaluation = eval }
+
     /// Execute a computer player's turn using the given personality style.
     let playComputerTurnStyled (style: AI.PlayStyle) (state: GameState) : TurnResult =
         let idx = state.CurrentPlayerIndex
@@ -138,32 +186,7 @@ module GameEngine =
                 let r, t, _ = Rules.playCard eval.HandCard state.Table
                 (r, t)
 
-        let updatedPlayer =
-            match result with
-            | Capture(_, captured, isSweep) ->
-                { player with
-                    Hand = remainingHand
-                    CapturedCards = player.CapturedCards @ [ eval.HandCard ] @ captured
-                    Sweeps = player.Sweeps + (if isSweep then 1 else 0) }
-            | Place _ ->
-                { player with Hand = remainingHand }
-
-        let updatedPlayers =
-            state.Players |> List.mapi (fun i p -> if i = idx then updatedPlayer else p)
-
-        let lastCapturer =
-            match result with
-            | Capture _ -> Some idx
-            | Place _   -> state.LastCapturer
-
-        { NewState =
-            { state with
-                Players = updatedPlayers
-                Table = newTable
-                CurrentPlayerIndex = (idx + 1) % state.Players.Length
-                LastCapturer = lastCapturer }
-          PlayResult = result
-          Evaluation = eval }
+        applyPlay state idx eval.HandCard remainingHand result newTable eval
 
     /// Execute a computer player's turn with balanced (optimal) play.
     let playComputerTurn (state: GameState) : TurnResult =
@@ -186,45 +209,20 @@ module GameEngine =
         let eval =
             match chosenOption with
             | Some opt ->
-                let pts =
-                    match result with
-                    | Capture(_, captured, isSweep) ->
-                        Rules.capturePointValue captured + (if isSweep then Rules.sweepBonus else 0.0)
-                    | Place _ -> 0.0
-                let cc = match result with Capture(_, c, _) -> c.Length | _ -> 0
-                let sw = match result with Capture(_, _, s) -> s | _ -> false
-                { AI.HandCard = chosenCard; AI.Result = result; AI.PointValue = pts
-                  AI.CardsCaptured = cc; AI.IsSweep = sw
-                  AI.CaptureOptions = []; AI.ChosenOption = Some opt }
+                match result with
+                | Capture(_, captured, isSweep) ->
+                    { AI.HandCard = chosenCard; AI.Result = result
+                      AI.PointValue = Rules.capturePointValue captured + (if isSweep then Rules.sweepBonus else 0.0)
+                      AI.CardsCaptured = captured.Length; AI.IsSweep = isSweep
+                      AI.CaptureOptions = []; AI.ChosenOption = Some opt }
+                | Place _ ->
+                    { AI.HandCard = chosenCard; AI.Result = result; AI.PointValue = 0.0
+                      AI.CardsCaptured = 0; AI.IsSweep = false
+                      AI.CaptureOptions = []; AI.ChosenOption = Some opt }
             | None ->
                 AI.evaluatePlay chosenCard state.Table
 
-        let updatedPlayer =
-            match result with
-            | Capture(_, captured, isSweep) ->
-                { player with
-                    Hand = remainingHand
-                    CapturedCards = player.CapturedCards @ [ chosenCard ] @ captured
-                    Sweeps = player.Sweeps + (if isSweep then 1 else 0) }
-            | Place _ ->
-                { player with Hand = remainingHand }
-
-        let updatedPlayers =
-            state.Players |> List.mapi (fun i p -> if i = idx then updatedPlayer else p)
-
-        let lastCapturer =
-            match result with
-            | Capture _ -> Some idx
-            | Place _   -> state.LastCapturer
-
-        { NewState =
-            { state with
-                Players = updatedPlayers
-                Table = newTable
-                CurrentPlayerIndex = (idx + 1) % state.Players.Length
-                LastCapturer = lastCapturer }
-          PlayResult = result
-          Evaluation = eval }
+        applyPlay state idx chosenCard remainingHand result newTable eval
 
     /// Check if all players' hands are empty.
     let allHandsEmpty (state: GameState) =
@@ -252,6 +250,6 @@ module GameEngine =
           Deck = deck
           CurrentPlayerIndex = startIdx
           DealRound = 0
-          TotalDeals = totalDealRounds config.PlayerCount
+          TotalDeals = SeatCount.dealRounds config.Seats
           LastCapturer = None
           Variant = config.Variant }

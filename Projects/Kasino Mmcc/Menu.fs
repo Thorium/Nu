@@ -72,7 +72,7 @@ type MenuDispatcher () =
 
     override this.Message (menu, message, _, _) =
         let mkConfig (m: Menu) : GameEngine.GameConfig =
-            { Variant = m.Variant; PlayerCount = m.PlayerCount; HumanCount = m.HumanCount
+            { Variant = m.Variant; Seats = GameEngine.SeatCount.ofIntOrDefault m.PlayerCount; HumanCount = m.HumanCount
               Seed = None; TargetScore = 16; Settings = m.Settings }
         match message with
         | ChooseVariant v -> just { menu with Variant = v; Step = PlayerCountSelect }

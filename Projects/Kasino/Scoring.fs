@@ -36,9 +36,8 @@ module Scoring =
         let uniqueMostSpades = (spadeCounts |> List.filter (fun (_, c) -> c = maxSpades)).Length = 1
 
         // Sweep deduction: subtract the minimum sweep count from everyone
-        let minSweeps =
-            if List.isEmpty players then 0
-            else players |> List.map (fun p -> p.Sweeps) |> List.min
+        // (players is non-empty here — the empty case returned [] above).
+        let minSweeps = players |> List.map (fun p -> p.Sweeps) |> List.min
 
         players
         |> List.map (fun player ->

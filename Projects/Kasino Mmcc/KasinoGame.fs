@@ -35,6 +35,7 @@ type KasinoGameCommand =
     | InstallGame of GameEngine.GameConfig
     | PopulateScores
     | ResumeGameplay
+    | Exit
     interface Command
 
 [<AutoOpen>]
@@ -63,7 +64,8 @@ type KasinoGameDispatcher () =
          Simulants.Gameplay.QuitEvent => ShowMenu
          Simulants.Gameplay.ShowScoresEvent => ShowScores
          Simulants.Scores.ContinueEvent => ResumeMatch
-         Simulants.Scores.MenuEvent => ShowMenu]
+         Simulants.Scores.MenuEvent => ShowMenu
+         Game.ExitRequestEvent => Exit]
 
     override this.Message (model, message, _, _) =
         match message with
@@ -94,6 +96,9 @@ type KasinoGameDispatcher () =
             // the Gameplay model persisted across the Scores detour; deal next round
             let gp = Simulants.Gameplay.GetGameplay world
             Simulants.Gameplay.SetGameplay (GameplayLogic.startNextRound gp) world
+        | Exit ->
+            // close-window button (engine publishes ExitRequestEvent); ignore in the editor
+            if world.Unaccompanied then World.exit world
 
     override this.Content (_, _) =
 

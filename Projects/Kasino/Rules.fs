@@ -19,7 +19,7 @@ module Rules =
 
     /// Check whether two combos share any card.
     let private combosOverlap (a: Card list) (b: Card list) =
-        a |> List.exists (fun ca -> b |> List.exists (fun cb -> ca = cb))
+        a |> List.exists (fun ca -> List.contains ca b)
 
     /// Find all maximal non-overlapping selections of combos.
     /// In Kasino, you MUST capture all non-overlapping subsets simultaneously.
@@ -82,9 +82,7 @@ module Rules =
         | [] -> []
         | [ single ] -> single.Captured
         | multiple ->
-            multiple
-            |> List.maxBy (fun opt -> opt.Captured.Length)
-            |> fun opt -> opt.Captured
+            (multiple |> List.maxBy (fun opt -> opt.Captured.Length)).Captured
 
     /// Check if playing a card results in a capture.
     let canCapture (handCard: Card) (tableCards: Card list) =

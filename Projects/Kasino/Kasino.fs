@@ -100,7 +100,7 @@ module AppState =
 
     // Game state
     let mutable config : GameEngine.GameConfig =
-        { Variant = StandardKasino; PlayerCount = 2; HumanCount = 1
+        { Variant = StandardKasino; Seats = GameEngine.SeatCount.ofIntOrDefault 2; HumanCount = 1
           Seed = None; TargetScore = 16; Settings = menuSettings }
     let mutable gameState : GameEngine.GameState option = None
     let mutable phase = Dealing
@@ -164,7 +164,7 @@ module AppState =
 
     /// Start a new game from current menu settings
     let startGame () =
-        config <- { Variant = menuVariant; PlayerCount = menuPlayerCount
+        config <- { Variant = menuVariant; Seats = GameEngine.SeatCount.ofIntOrDefault menuPlayerCount
                     HumanCount = menuHumanCount; Seed = None; TargetScore = 16
                     Settings = menuSettings }
         rng <- Random()
@@ -840,11 +840,11 @@ type KasinoDispatcher () =
         KasinoDispatcher.RenderRules (game, world)
         KasinoDispatcher.EndMode world
 
-        // handle Alt+F4
-        if  World.isKeyboardAltDown world &&
-            World.isKeyboardKeyDown KeyboardKey.F4 world &&
-            world.Unaccompanied then
-            World.exit world
+        // when not in editor, handle the close-window button or Alt+F4
+        if world.Unaccompanied then
+            if  World.doSubscriptionAny "Exit" game.ExitRequestEvent world ||
+                World.isKeyboardAltDown world && World.isKeyboardKeyDown KeyboardKey.F4 world then
+                World.exit world
 
         // Toggle fullscreen on F11
         if World.isKeyboardKeyPressed KeyboardKey.F11 world then

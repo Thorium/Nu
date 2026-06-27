@@ -90,8 +90,7 @@ module AI =
             let best =
                 options
                 |> List.map (fun opt -> evaluateOption handCard opt tableCards)
-                |> List.sortByDescending (fun e -> (e.PointValue, float e.CardsCaptured, if e.IsSweep then 1.0 else 0.0))
-                |> List.head
+                |> List.maxBy (fun e -> (e.PointValue, float e.CardsCaptured, if e.IsSweep then 1.0 else 0.0))
             { best with CaptureOptions = options }
 
     /// Evaluate a play with context-aware scoring.

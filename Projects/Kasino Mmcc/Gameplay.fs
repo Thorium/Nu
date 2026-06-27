@@ -95,7 +95,7 @@ type Gameplay =
     /// Unutilized model (screen not selected).
     static member empty =
         { Active = false
-          Config = ({ Variant = StandardKasino; PlayerCount = 2; HumanCount = 1
+          Config = ({ Variant = StandardKasino; Seats = GameEngine.SeatCount.ofIntOrDefault 2; HumanCount = 1
                       Seed = None; TargetScore = 16; Settings = Settings.defaultSettings } : GameEngine.GameConfig)
           State = Gameplay.emptyState
           Phase = Shuffling

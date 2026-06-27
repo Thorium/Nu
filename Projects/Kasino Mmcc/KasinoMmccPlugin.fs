@@ -11,7 +11,7 @@ type KasinoMmccPlugin () =
 
     override this.EditModes =
         let demoConfig : GameEngine.GameConfig =
-            { Variant = StandardKasino; PlayerCount = 2; HumanCount = 1
+            { Variant = StandardKasino; Seats = GameEngine.SeatCount.ofIntOrDefault 2; HumanCount = 1
               Seed = None; TargetScore = 16
               Settings = { Settings.defaultSettings with AiPersonalities = true; ChatEnabled = true } }
         Map.ofList
