@@ -322,11 +322,16 @@ let findNearestToBall (gs: GameState) startIdx endIdx =
 /// per frame). Prevents shooting and immediately picking the ball back up.
 let RecaptureCooldownTicks = 18<tick>
 
-/// powerFrac: 0.0..1.0 — fraction of ShotPower (pass vs full shot)
+/// Puck speed for a full-power release (subpx/tick). Every player shoots at
+/// the same speed for a given charge level, regardless of team/player stats
+/// or how fast the shooter is moving — matches the fastest teams' ShotPower.
+let ShotReleaseSpeed = 64.0<subpx / tick>
+
+/// powerFrac: 0.0..1.0 — fraction of ShotReleaseSpeed (pass vs full shot)
 let releaseBall (gs: GameState) entityIdx (powerFrac: float) =
     let ent = gs.Entities[entityIdx]
     let ball = gs.Entities[gs.BallIdx]
-    let power = ent.ShotPower * powerFrac
+    let power = ShotReleaseSpeed * powerFrac
     ent.VelX <- zeroVel
     ent.VelY <- zeroVel
     ball.VelX <- dirToVel ent.DirX power
