@@ -80,6 +80,11 @@ type GameState =
       mutable ClockTick: int<tick>
       mutable BallState: BallState
       mutable PossessionTimer: int<tick>
+      // Shot re-capture cooldown: after a player releases the ball, that
+      // player (and only that player) cannot re-capture it for a short
+      // window, so you cannot pass to yourself.
+      mutable LastReleaser: int
+      mutable RecaptureBlockTicks: int<tick>
       mutable StalemateCounter: int<tick>
       mutable PrevBallState: BallState
       mutable ActivePlayer1: int
@@ -190,6 +195,8 @@ let createGameState () : GameState =
       ClockTick = 0<tick>
       BallState = Free
       PossessionTimer = 0<tick>
+      LastReleaser = -1
+      RecaptureBlockTicks = 0<tick>
       StalemateCounter = 0<tick>
       PrevBallState = Free
       ActivePlayer1 = 0
@@ -226,6 +233,9 @@ let setPlayerMode (gs: GameState) fivePlayer =
     let ppt = if fivePlayer then PlayersPerTeam5 else PlayersPerTeam3
     gs.PlayersPerTeam <- ppt
     gs.FivePlayerMode <- fivePlayer
+    // Entity indices change between modes — drop any stale re-capture block
+    gs.LastReleaser <- -1
+    gs.RecaptureBlockTicks <- 0<tick>
     // Ensure ball entity has correct stats
     let ball = gs.Entities[gs.BallIdx]
     ball.MaxSpeed <- BallMaxSpeed
@@ -259,6 +269,8 @@ let resetPositions (gs: GameState) =
     ball.VelY <- zeroVel
     gs.BallState <- Free
     gs.PossessionTimer <- 0<tick>
+    gs.LastReleaser <- -1
+    gs.RecaptureBlockTicks <- 0<tick>
     gs.StalemateCounter <- 0<tick>
     gs.PrevBallState <- Free
     gs.BallAnimFrame <- BallAnimFrames
@@ -305,6 +317,11 @@ let findNearestToBall (gs: GameState) startIdx endIdx =
 
 // ─── Release Ball (kick/shoot) ─────────────────────────────────────────
 
+/// Ticks a player is blocked from re-capturing the ball after releasing it.
+/// 18 ticks = 0.3 s at the ~60 Hz physics rate (30 FPS x 2 physics ticks
+/// per frame). Prevents shooting and immediately picking the ball back up.
+let RecaptureCooldownTicks = 18<tick>
+
 /// powerFrac: 0.0..1.0 — fraction of ShotPower (pass vs full shot)
 let releaseBall (gs: GameState) entityIdx (powerFrac: float) =
     let ent = gs.Entities[entityIdx]
@@ -317,6 +334,10 @@ let releaseBall (gs: GameState) entityIdx (powerFrac: float) =
     gs.BallState <- Free
     gs.BallAnimFrame <- BallAnimFrames
     gs.BallFrictionCounter <- BallAnimFrames
+    // Block the releaser (and only them) from re-capturing for a short
+    // window, starting the very tick the ball leaves the stick.
+    gs.LastReleaser <- entityIdx
+    gs.RecaptureBlockTicks <- RecaptureCooldownTicks
     gs.StickAnimTimers[entityIdx] <- 10
 
 // ─── Apply Friction ────────────────────────────────────────────────────
@@ -649,8 +670,13 @@ let checkBallPickup (gs: GameState) =
         let rec tryPickup i =
             if i < gs.NumPlayers then
                 let ent = gs.Entities[i]
+                // The player who just released the ball cannot re-capture it
+                // during the cooldown; teammates and opponents still can.
+                let blocked = i = gs.LastReleaser && gs.RecaptureBlockTicks > 0<tick>
 
-                if abs (ent.X - ball.X) < CollisionDist && abs (ent.Y - ball.Y) < CollisionDist then
+                if not blocked
+                   && abs (ent.X - ball.X) < CollisionDist
+                   && abs (ent.Y - ball.Y) < CollisionDist then
                     gs.BallState <- HeldBy i
                     gs.PossessionTimer <- PossessionTimer
                     ball.VelX <- zeroVel
@@ -735,6 +761,13 @@ let gameTick (gs: GameState) =
 
             let ppt = gs.PlayersPerTeam
             let t2s = gs.Team2Start
+
+            // Re-capture cooldown countdown. Decremented before the teams are
+            // processed, so a release during this tick keeps the full window:
+            // the releaser is blocked on the release tick plus the 17 ticks
+            // after it, and may re-capture 18 ticks (0.3 s) after the release.
+            if gs.RecaptureBlockTicks > 0<tick> then
+                gs.RecaptureBlockTicks <- gs.RecaptureBlockTicks - 1<tick>
 
             // Active player: the holder while a skater has the ball,
             // otherwise nearest to ball (skip goalie in 5-player mode)
