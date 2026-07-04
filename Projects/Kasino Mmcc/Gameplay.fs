@@ -70,6 +70,7 @@ type Gameplay =
       SelectedCardIndex: int option
       CapturePreview: CapturePreview
       CaptureOptions: Rules.CaptureOption list
+      CapturePage: int                              // current page of the capture modal (it paginates)
       LastPlayMessage: string
       LastChat: string
       LastEval: AI.PlayEvaluation option
@@ -106,6 +107,7 @@ type Gameplay =
           SelectedCardIndex = None
           CapturePreview = NoCapture
           CaptureOptions = []
+          CapturePage = 0
           LastPlayMessage = ""
           LastChat = ""
           LastEval = None
@@ -142,7 +144,10 @@ type GameplayMessage =
     | TimeUpdate
     | SelectCard of int
     | PlaySelectedCard
+    | PlaceSelectedCard      // Standard only: place a capture-capable card without capturing
     | ChooseCapture of int
+    | CancelCapture          // dismiss the capture modal without playing
+    | CapturePageNext        // advance the paginated capture modal
     | KeyPressed of KeyboardKey
     | PointerDown            // left mouse down — grab a hand card (drag & drop)
     | PointerDrag            // mouse moved with button held — move the dragged card
@@ -421,7 +426,7 @@ type GameplayDispatcher () =
             | _ :: _ :: _ ->
                 // overlapping captures — let the player pick in the modal
                 just { gameplay with SelectedCardIndex = Some i; CapturePreview = preview; CaptureOptions = options
-                                     Phase = ChoosingCaptureOption; PhaseTicks = 0L; DragIndex = None }
+                                     CapturePage = 0; Phase = ChoosingCaptureOption; PhaseTicks = 0L; DragIndex = None }
             | opts ->
                 let chosen = match opts with [ o ] -> Some o | _ -> None
                 let tr = GameEngine.playHumanTurn gameplay.State i chosen
@@ -476,7 +481,7 @@ type GameplayDispatcher () =
                 match gameplay.CaptureOptions with
                 | _ :: _ :: _ ->
                     // genuine choice between overlapping captures → let the player pick
-                    just { gameplay with Phase = ChoosingCaptureOption; PhaseTicks = 0L }
+                    just { gameplay with Phase = ChoosingCaptureOption; PhaseTicks = 0L; CapturePage = 0 }
                 | options ->
                     let chosen = match options with [ o ] -> Some o | _ -> None
                     let tr = GameEngine.playHumanTurn gameplay.State i chosen
@@ -485,6 +490,16 @@ type GameplayDispatcher () =
                     | Capture (_, _, true) -> withSignal PlaySweepSound gp
                     | Capture _ -> withSignal PlayCaptureSound gp
                     | Place _ -> withSignal PlayPlaceSound gp
+            | _ -> just gameplay
+
+        | PlaceSelectedCard ->
+            // Standard Kasino: capturing is optional, so a capture-capable card
+            // may be placed instead — from the pre-play state or the modal.
+            match gameplay.Phase, gameplay.SelectedCardIndex with
+            | (WaitingForHuman | ChoosingCaptureOption), Some i when gameplay.Config.Variant = StandardKasino ->
+                let tr = GameEngine.playHumanPlaceTurn gameplay.State i
+                let gp = { GameplayLogic.applyTurn gameplay tr with DragIndex = None }
+                withSignal PlayPlaceSound gp
             | _ -> just gameplay
 
         | ChooseCapture idx ->
@@ -498,8 +513,26 @@ type GameplayDispatcher () =
                 | _ -> withSignal PlayCaptureSound gp
             | _ -> just gameplay
 
+        | CancelCapture ->
+            if gameplay.Phase = ChoosingCaptureOption then
+                just { gameplay with Phase = WaitingForHuman; PhaseTicks = 0L
+                                     SelectedCardIndex = None; CapturePreview = NoCapture
+                                     CaptureOptions = []; CapturePage = 0 }
+            else just gameplay
+
+        | CapturePageNext ->
+            just { gameplay with CapturePage = gameplay.CapturePage + 1 }
+
         | KeyPressed key ->
-            if gameplay.Active && key = KeyboardKey.Escape then withSignal RequestQuit gameplay
+            if gameplay.Active && key = KeyboardKey.Escape then
+                // In the capture modal Escape backs out of the choice; anywhere
+                // else it quits to the menu. (Previously Escape mid-choice
+                // abandoned the whole match.)
+                if gameplay.Phase = ChoosingCaptureOption then
+                    just { gameplay with Phase = WaitingForHuman; PhaseTicks = 0L
+                                         SelectedCardIndex = None; CapturePreview = NoCapture
+                                         CaptureOptions = []; CapturePage = 0 }
+                else withSignal RequestQuit gameplay
             else just gameplay
 
         | PointerDown ->
@@ -698,10 +731,23 @@ type GameplayDispatcher () =
                          Entity.FontSizing == Some 9.0f
                          Entity.Elevation == 2.0f] ]
 
-        // capture-choice modal
+        // capture-choice modal — paginated (up to 64 options can exist, so an
+        // unbounded column would run off-screen), with Cancel always available
+        // and, in Standard Kasino, the option to decline the capture entirely.
         let captureModal =
             if gameplay.Phase <> ChoosingCaptureOption then []
             else
+                let optionsPerPage = 5
+                let optCount = List.length gameplay.CaptureOptions
+                let pageCount = max 1 ((optCount + optionsPerPage - 1) / optionsPerPage)
+                let page = ((gameplay.CapturePage % pageCount) + pageCount) % pageCount
+                let pageStart = page * optionsPerPage
+                let visible =
+                    gameplay.CaptureOptions
+                    |> List.indexed
+                    |> List.skip pageStart
+                    |> List.truncate optionsPerPage
+                let allowPlace = gameplay.Config.Variant = StandardKasino
                 [ Content.staticSprite "ModalBg"
                     [Entity.Position == v3 0.0f 0.0f 0.0f
                      Entity.Size == v3 640.0f 360.0f 0.0f
@@ -716,17 +762,37 @@ type GameplayDispatcher () =
                      Entity.TextColor == Clr.white
                      Entity.FontSizing == Some 14.0f
                      Entity.Elevation == 7.0f]
-                  for i, opt in List.indexed gameplay.CaptureOptions do
+                  for row, (i, opt) in List.indexed visible do
                     let label =
                         opt.Captured
                         |> List.map Cards.display
                         |> String.concat ", "
                     Content.button ("CaptureOpt" + string i)
-                        [Entity.Position := v3 0.0f (50.0f - float32 i * 34.0f) 0.0f
+                        [Entity.Position := v3 0.0f (56.0f - float32 row * 34.0f) 0.0f
                          Entity.Size == v3 420.0f 28.0f 0.0f
                          Entity.Text := $"{i + 1})  {label}"
                          Entity.Elevation == 7.0f
-                         Entity.ClickEvent => ChooseCapture i] ]
+                         Entity.ClickEvent => ChooseCapture i]
+                  if pageCount > 1 then
+                    Content.button "CaptureMore"
+                        [Entity.Position == v3 0.0f -114.0f 0.0f
+                         Entity.Size == v3 420.0f 28.0f 0.0f
+                         Entity.Text := $"More options ({page + 1}/{pageCount})"
+                         Entity.Elevation == 7.0f
+                         Entity.ClickEvent => CapturePageNext]
+                  if allowPlace then
+                    Content.button "CapturePlace"
+                        [Entity.Position == v3 -105.0f -148.0f 0.0f
+                         Entity.Size == v3 230.0f 28.0f 0.0f
+                         Entity.Text == "Place instead"
+                         Entity.Elevation == 7.0f
+                         Entity.ClickEvent => PlaceSelectedCard]
+                  Content.button "CaptureCancel"
+                    [Entity.Position == v3 120.0f -148.0f 0.0f
+                     Entity.Size == v3 130.0f 28.0f 0.0f
+                     Entity.Text == "Cancel"
+                     Entity.Elevation == 7.0f
+                     Entity.ClickEvent => CancelCapture] ]
 
         // (round-over / game-over now route to the dedicated Scores screen via
         // ShowScoresCmd — see the AnimatingPlay → enterTurn transition above)
@@ -852,6 +918,17 @@ type GameplayDispatcher () =
                          Entity.Text == "Play"
                          Entity.Elevation == 4.0f
                          Entity.ClickEvent => PlaySelectedCard]
+                    // Standard Kasino: capturing is optional — offer to place the
+                    // selected card instead when it could capture
+                    if gameplay.Config.Variant = StandardKasino
+                       && (match gameplay.CapturePreview with NoCapture -> false | _ -> true) then
+                        Content.button "PlaceBtn"
+                            [Entity.Position == v3 210.0f (Ly.handY - 36.0f) 0.0f
+                             Entity.Size == v3 120.0f 30.0f 0.0f
+                             Entity.Text == "Place Instead"
+                             Entity.FontSizing == Some 10.0f
+                             Entity.Elevation == 4.0f
+                             Entity.ClickEvent => PlaceSelectedCard]
 
                 // always-available return-to-menu + help buttons (top-right)
                 Content.button "MenuBtn"

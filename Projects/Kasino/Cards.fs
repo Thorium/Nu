@@ -196,7 +196,9 @@ module Cards =
         (cardsRemaining: int)
         (capturedCards: int) (capturedSpades: int) : float =
 
-        // The played hand card also lands in the pile, hence the +1.
+        // The played hand card also lands in the pile, hence the +1 in the
+        // card count. capturedSpades must already include the played card
+        // when it is a spade (the caller banks handCard :: captured).
         let cardMargin = cardRaceMargin (float (myCards + capturedCards + 1 - opponentCards)) cardsRemaining
         let spadeMargin =
             if capturedSpades > 0 then spadeRaceMargin (float (mySpades + capturedSpades - opponentSpades)) cardsRemaining

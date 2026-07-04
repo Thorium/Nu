@@ -110,6 +110,9 @@ module AppState =
     let mutable capturePreview = NoCapture
     let mutable captureOptions : Rules.CaptureOption list = []
     let mutable captureCardIdx = 0
+    /// Current page of the capture-option modal (6 options per page; up to 64
+    /// options can exist, so the modal paginates).
+    let mutable capturePage = 0
     let mutable lastPlayMessage = ""
     /// Latest table-talk line from a computer player (empty = none shown).
     let mutable lastChat = ""
@@ -540,6 +543,7 @@ module Helpers =
                 AppState.phase <- ChoosingCaptureOption
                 AppState.captureOptions <- options
                 AppState.captureCardIdx <- cardIndex
+                AppState.capturePage <- 0
                 AppState.selectedCardIndex <- None
             | _ ->
                 // Build card animation: from hand position to scatter/center position
@@ -591,6 +595,43 @@ module Helpers =
                 { AnimCard = card
                   FromX = fromX; FromY = fromY
                   ToX = 0.0f; ToY = Ly.tableY
+                  Duration = AppState.cardSlideDuration }
+            let msg = formatPlayResult player.Name turnResult.PlayResult
+            AppState.gameState <- Some turnResult.NewState
+            AppState.lastPlayMessage <- msg
+            AppState.lastChat <- ""
+            AppState.selectedCardIndex <- None
+            AppState.lastEval <- Some turnResult.Evaluation
+            AppState.phase <- AnimatingPlay
+            AppState.phaseTimer <- 0.0f
+
+    /// Place a capture-capable card without capturing (Standard Kasino only,
+    /// where capturing is optional).
+    let processHumanPlace (cardIndex: int) =
+        match AppState.gameState with
+        | None -> ()
+        | Some gs ->
+            let player = gs.Players[gs.CurrentPlayerIndex]
+            let card = player.Hand[cardIndex]
+            let handSize = List.length player.Hand
+            let startX = Ly.centerCardsX handSize Ly.cardGap
+            let fromX = startX + float32 cardIndex * (Ly.cardW + Ly.cardGap) + Ly.cardW / 2.0f
+            let fromY = Ly.handY
+            let turnResult = GameEngine.playHumanPlaceTurn gs cardIndex
+            AppState.currentCollectAnim <- buildCollectAnimation turnResult.PlayResult true gs.Table
+            let toX, toY =
+                match turnResult.PlayResult, AppState.tableLayout with
+                | Place _, RandomScatter ->
+                    let newPos = computeScatteredPositions turnResult.NewState.Table AppState.scatteredPositions
+                    AppState.scatteredPositions <- newPos
+                    match Map.tryFind card newPos with
+                    | Some(sx, sy, _) -> (sx, sy)
+                    | None -> (0.0f, Ly.tableY)
+                | _ -> (0.0f, Ly.tableY)
+            AppState.currentCardAnim <- Some
+                { AnimCard = card
+                  FromX = fromX; FromY = fromY
+                  ToX = toX; ToY = toY
                   Duration = AppState.cardSlideDuration }
             let msg = formatPlayResult player.Name turnResult.PlayResult
             AppState.gameState <- Some turnResult.NewState
@@ -710,8 +751,9 @@ module RulesContent =
                ""
                "Each round, players are dealt cards in waves of 4."
                "On your turn you MUST play one card from your hand:"
-               "  - If it can capture table cards, you take them."
-               "  - If not, your card is placed on the table."
+               "  - If it can capture table cards, you may take them"
+               "    (optional in Standard, forced in Laisto)."
+               "  - Otherwise your card is placed on the table."
                ""
                "After all cards are played, scores are tallied."
                "First player to reach 16 cumulative points wins!" |])
@@ -1616,6 +1658,23 @@ type KasinoDispatcher () =
                 | Some idx -> Helpers.processHumanPlay idx
                 | None -> ()
 
+        // ── "Place Instead" button — Standard Kasino only, where declining a
+        // capture is legal. Shown beside Play when the selected card captures.
+        let btnPlaceVisible =
+            btnPlayVisible
+            && gs.Variant = StandardKasino
+            && (match AppState.capturePreview with NoCapture -> false | _ -> true)
+        if World.doButton "BtnPlaceInstead"
+            [Entity.Position .= v3 165.0f (Ly.handY + 45.0f) 0.0f
+             Entity.Size .= v3 130.0f Ly.btnH 0.0f
+             Entity.Text .= "Place Instead"
+             Entity.Visible @= btnPlaceVisible
+             Entity.Elevation .= 5.0f] world then
+            if btnPlaceVisible then
+                match AppState.selectedCardIndex with
+                | Some idx -> Helpers.processHumanPlace idx
+                | None -> ()
+
         // ── "Continue" button (always declared, visible in RoundOver) ──
         let continueVisible = AppState.phase = RoundOver
         if World.doButton "BtnContinue"
@@ -1638,8 +1697,17 @@ type KasinoDispatcher () =
              Entity.Visible @= isModal
              Entity.Elevation .= 6.0f] world |> ignore
 
+        // The modal paginates: 6 option slots per page (up to 64 options can
+        // exist), with More/Place/Cancel at fixed rows below the slots. All
+        // dynamic values use @= — a `.=` computed from modal state would be
+        // frozen at first-frame (non-modal) values forever.
+        let optionsPerPage = 6
+        let capturePageCount = max 1 ((AppState.captureOptions.Length + optionsPerPage - 1) / optionsPerPage)
+        let capturePageClamped = ((AppState.capturePage % capturePageCount) + capturePageCount) % capturePageCount
+        let capturePageStart = capturePageClamped * optionsPerPage
+
         World.doText "CaptureHeader"
-            [Entity.Position .= v3 0.0f (60.0f + float32 (if isModal then AppState.captureOptions.Length else 0) * 18.0f) 0.0f
+            [Entity.Position .= v3 0.0f 150.0f 0.0f
              Entity.Size .= v3 400.0f 24.0f 0.0f
              Entity.Text @= (if isModal then "Choose which cards to capture:" else "")
              Entity.Justification .= Justified (JustifyCenter, JustifyMiddle)
@@ -1647,13 +1715,14 @@ type KasinoDispatcher () =
              Entity.Visible @= isModal
              Entity.Elevation .= 7.0f] world
 
-        for i in 0 .. 5 do
+        for i in 0 .. optionsPerPage - 1 do
             let name = $"BtnOpt{i}"
-            if isModal && i < AppState.captureOptions.Length then
-                let opt = AppState.captureOptions[i]
+            let optIdx = capturePageStart + i
+            if isModal && optIdx < AppState.captureOptions.Length then
+                let opt = AppState.captureOptions[optIdx]
                 let capturedStr = opt.Captured |> List.map Cards.display |> String.concat " "
                 let label = $"{i + 1}: {capturedStr} ({opt.Captured.Length})"
-                let y = 40.0f - float32 i * 34.0f
+                let y = 120.0f - float32 i * 34.0f
                 if World.doButton name
                     [Entity.Position .= v3 0.0f y 0.0f
                      Entity.Size .= v3 340.0f 28.0f 0.0f
@@ -1666,9 +1735,29 @@ type KasinoDispatcher () =
                     [Entity.Visible @= false
                      Entity.Elevation .= 7.0f] world |> ignore
 
-        let cancelY = 40.0f - float32 (if isModal then AppState.captureOptions.Length else 0) * 34.0f - 10.0f
+        let moreVisible = isModal && capturePageCount > 1
+        if World.doButton "BtnOptMore"
+            [Entity.Position .= v3 0.0f -90.0f 0.0f
+             Entity.Size .= v3 340.0f 28.0f 0.0f
+             Entity.Text @= (if moreVisible then $"More options ({capturePageClamped + 1}/{capturePageCount})" else "")
+             Entity.Visible @= moreVisible
+             Entity.Elevation .= 7.0f] world then
+            if moreVisible then
+                AppState.capturePage <- (capturePageClamped + 1) % capturePageCount
+
+        // Standard Kasino: capturing is optional — the capture may be declined.
+        let placeOptVisible = isModal && gs.Variant = StandardKasino
+        if World.doButton "BtnOptPlace"
+            [Entity.Position .= v3 0.0f -124.0f 0.0f
+             Entity.Size .= v3 340.0f 28.0f 0.0f
+             Entity.Text .= "Place on table instead"
+             Entity.Visible @= placeOptVisible
+             Entity.Elevation .= 7.0f] world then
+            if placeOptVisible then
+                Helpers.processHumanPlace AppState.captureCardIdx
+
         if World.doButton "BtnCancel"
-            [Entity.Position .= v3 0.0f cancelY 0.0f
+            [Entity.Position .= v3 0.0f -158.0f 0.0f
              Entity.Size .= v3 140.0f 28.0f 0.0f
              Entity.Text .= "Cancel"
              Entity.Visible @= isModal
@@ -1681,6 +1770,14 @@ type KasinoDispatcher () =
         // ── Phase-specific input handling (advancing only) ────
         if world.Advancing then
             match AppState.phase with
+            | Shuffling | Dealing | ComputerThinking | AnimatingPlay when
+                World.isKeyboardKeyPressed KeyboardKey.Escape world ->
+                // Escape returns to the menu from phases with no Escape
+                // handling of their own — in particular watch-AI-only games,
+                // which never reach the human input branch.
+                AppState.resetMenu ()
+                game.SetKasinoMode KasinoMenu world
+
             | Dealing ->
                 AppState.dealStepElapsed <- AppState.dealStepElapsed + dt
                 if AppState.dealStepIndex >= List.length AppState.dealSteps then
@@ -1772,12 +1869,18 @@ type KasinoDispatcher () =
                             AppState.capturePreview <- Helpers.computePreview card gs.Table
                             AppState.dragState <- Dragging(idx, mousePos, mousePos)
                         | None ->
-                            // Don't deselect if clicking on the Play button area
+                            // Don't deselect if clicking on the Play or Place
+                            // Instead button areas
                             let btnCenterY = Ly.handY + 45.0f
-                            let onPlayBtn =
-                                btnPlayVisible &&
-                                abs mx <= 90.0f &&
+                            let onPlaceBtn =
+                                btnPlaceVisible &&
+                                mx >= 100.0f && mx <= 230.0f &&
                                 abs (my - btnCenterY) <= Ly.btnH / 2.0f
+                            let onPlayBtn =
+                                (btnPlayVisible &&
+                                 abs mx <= 90.0f &&
+                                 abs (my - btnCenterY) <= Ly.btnH / 2.0f)
+                                || onPlaceBtn
                             // Otherwise, grab a table card to nudge it (scatter mode only —
                             // the strict grid never overlaps, so nothing to untangle there).
                             let tableCardOpt =
@@ -1863,12 +1966,19 @@ type KasinoDispatcher () =
                             | Some(sx, sy, _) -> (sx, sy)
                             | None -> (0.0f, Ly.tableY)
                         | _ -> (0.0f, Ly.tableY)
+                    // Animate the card the AI actually played (from its real
+                    // slot in the hand), not Hand[0] — anything else leaks a
+                    // hidden card face-up.
+                    let playedCard =
+                        match turnResult.PlayResult with
+                        | Capture(hc, _, _) | Place hc -> hc
                     if not (List.isEmpty player.Hand) then
                         let oppHandSize = List.length player.Hand
-                        let fromX = Ly.centerCardsX oppHandSize Ly.cardGap + Ly.cardW / 2.0f
+                        let cardIdx = player.Hand |> List.tryFindIndex ((=) playedCard) |> Option.defaultValue 0
+                        let fromX = Ly.centerCardsX oppHandSize Ly.cardGap + float32 cardIdx * (Ly.cardW + Ly.cardGap) + Ly.cardW / 2.0f
                         let fromY = Ly.topOppY
                         AppState.currentCardAnim <- Some
-                            { AnimCard = player.Hand[0]
+                            { AnimCard = playedCard
                               FromX = fromX; FromY = fromY
                               ToX = toX; ToY = toY
                               Duration = AppState.cardSlideDuration }
@@ -1905,21 +2015,25 @@ type KasinoDispatcher () =
                     AppState.phase <- WaitingForHuman
                     AppState.selectedCardIndex <- None
                     AppState.capturePreview <- NoCapture
-                // Number keys to choose capture option
-                elif World.isKeyboardKeyPressed KeyboardKey.Num1 world && AppState.captureOptions.Length >= 1 then
-                    Helpers.processCapture AppState.captureCardIdx AppState.captureOptions[0]
-                elif World.isKeyboardKeyPressed KeyboardKey.Num2 world && AppState.captureOptions.Length >= 2 then
-                    Helpers.processCapture AppState.captureCardIdx AppState.captureOptions[1]
-                elif World.isKeyboardKeyPressed KeyboardKey.Num3 world && AppState.captureOptions.Length >= 3 then
-                    Helpers.processCapture AppState.captureCardIdx AppState.captureOptions[2]
-                elif World.isKeyboardKeyPressed KeyboardKey.Num4 world && AppState.captureOptions.Length >= 4 then
-                    Helpers.processCapture AppState.captureCardIdx AppState.captureOptions[3]
+                else
+                    // Number keys choose from the visible page of the modal
+                    let pickVisible n =
+                        let optIdx = capturePageStart + n
+                        if optIdx < AppState.captureOptions.Length then
+                            Helpers.processCapture AppState.captureCardIdx AppState.captureOptions[optIdx]
+                    if World.isKeyboardKeyPressed KeyboardKey.Num1 world then pickVisible 0
+                    elif World.isKeyboardKeyPressed KeyboardKey.Num2 world then pickVisible 1
+                    elif World.isKeyboardKeyPressed KeyboardKey.Num3 world then pickVisible 2
+                    elif World.isKeyboardKeyPressed KeyboardKey.Num4 world then pickVisible 3
 
             | RoundOver ->
                 if World.isKeyboardKeyPressed KeyboardKey.Enter world then
                     AppState.enterConsumed <- true
                     AppState.enterScores ()
                     game.SetKasinoMode KasinoScores world
+                elif World.isKeyboardKeyPressed KeyboardKey.Escape world then
+                    AppState.resetMenu ()
+                    game.SetKasinoMode KasinoMenu world
 
             | GameOver -> ()
 
@@ -2019,18 +2133,23 @@ type KasinoDispatcher () =
                         [Entity.Visible @= false
                          Entity.Elevation .= 1.0f] world
 
-        // Winner announcement (game over only)
+        // Winner announcement (game over only). An exact tie for the deciding
+        // score names every tied player rather than an arbitrary one.
         if AppState.scoreIsGameOver then
-            let winner =
+            let scores = AppState.cumulativeScores |> Map.toList
+            let bestScore =
                 match AppState.config.Variant with
-                | StandardKasino ->
-                    AppState.cumulativeScores |> Map.toList |> List.maxBy snd
-                | LaistoKasino ->
-                    AppState.cumulativeScores |> Map.toList |> List.minBy snd
+                | StandardKasino -> scores |> List.map snd |> List.max
+                | LaistoKasino   -> scores |> List.map snd |> List.min
+            let winners = scores |> List.filter (fun (_, s) -> s = bestScore) |> List.map fst
+            let winnerText =
+                match winners with
+                | [ w ] -> $"{w} wins with {bestScore} points!"
+                | ws -> String.concat " & " ws + $" tie with {bestScore} points!"
             World.doText "ScWinner"
                 [Entity.Position .= v3 0.0f (baseY - float32 categories.Length * rowH - 16.0f) 0.0f
                  Entity.Size .= v3 450.0f 24.0f 0.0f
-                 Entity.Text @= $"{(fst winner)} wins with {(snd winner)} points!"
+                 Entity.Text @= winnerText
                  Entity.TextColor .= Clr.gold
                  Entity.Justification .= Justified (JustifyCenter, JustifyMiddle)
                  Entity.FontSizing .= Some 18.0f

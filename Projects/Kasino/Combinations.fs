@@ -8,20 +8,30 @@ namespace Kasino.Domain
 
 module Combinations =
 
-    /// Find all subsets of items whose values sum exactly to target.
-    /// Each item is (index, value). Returns list of index-lists.
+    /// Upper bound on enumerated subsets. A pathological table (15+ low
+    /// cards) can produce thousands of exact-sum subsets, and the O(n²)
+    /// conflict precompute in Rules.findCaptureOptions over those would
+    /// freeze the turn. Real play needs only a handful; Bron-Kerbosch is
+    /// separately capped at 64 options.
+    let private maxSubsets = 128
+
+    /// Find subsets of items whose values sum exactly to target, up to
+    /// maxSubsets of them. Each item is (index, value). Returns list of
+    /// index-lists in include-first depth-first order.
     let findExactSubsets (items: (int * int) list) (target: int) : int list list =
+        let results = ResizeArray<int list>()
         let rec search remaining target acc =
-            match remaining with
-            | _ when target = 0 -> [ List.rev acc ]
-            | [] -> []
-            | _ when target < 0 -> []
-            | (idx, value) :: rest ->
-                // Branch: include this item or skip it
-                let withItem = search rest (target - value) (idx :: acc)
-                let without  = search rest target acc
-                withItem @ without
+            if results.Count < maxSubsets then
+                match remaining with
+                | _ when target = 0 -> results.Add(List.rev acc)
+                | [] -> ()
+                | _ when target < 0 -> ()
+                | (idx, value) :: rest ->
+                    // Branch: include this item or skip it
+                    search rest (target - value) (idx :: acc)
+                    search rest target acc
         search items target []
+        List.ofSeq results
 
     /// Find all subsets of cards on the table that sum exactly to
     /// the hand card's capture value. Returns list of card-lists.

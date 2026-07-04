@@ -39,9 +39,11 @@ module AI =
         let result, _ = Rules.resolveCapture handCard option tableCards
         match result with
         | Capture(_, captured, isSweep) ->
+            // The played card is banked together with the capture
+            // (see GameEngine.applyPlay), so its points count too.
             { HandCard       = handCard
               Result         = result
-              PointValue     = Rules.capturePointValue captured + (if isSweep then Rules.sweepBonus else 0.0)
+              PointValue     = Rules.capturePointValue (handCard :: captured) + (if isSweep then Rules.sweepBonus else 0.0)
               CardsCaptured  = captured.Length
               IsSweep        = isSweep
               CaptureOptions = []
@@ -56,8 +58,11 @@ module AI =
         | Capture(_, captured, isSweep) ->
             // Direct points sum per card; the most-cards/most-spades race
             // bonuses are counted once for the whole capture (not per card).
-            let directPts = captured |> List.sumBy Cards.directValue
-            let capturedSpades = captured |> List.filter Cards.isSpade |> List.length
+            // The played card lands in the pile with the capture, so it
+            // counts toward both the direct points and the spade race.
+            let banked = handCard :: captured
+            let directPts = banked |> List.sumBy Cards.directValue
+            let capturedSpades = banked |> List.filter Cards.isSpade |> List.length
             let raceBonus =
                 Cards.captureRaceValue
                     ctx.MyCards ctx.MySpades
@@ -134,8 +139,13 @@ module AI =
         let nonCaptures = evals |> List.filter (fun e -> e.CardsCaptured = 0)
         if not (List.isEmpty nonCaptures) then
             let scoreFn = Cards.scoringValueInContext ctx.MyCards ctx.MySpades ctx.OpponentCards ctx.OpponentSpades ctx.CardsRemaining
+            // Shed the most dangerous card first: a hoarded point card
+            // (ace, 2♠, 10♦, spades) tends to find a forced capture late in
+            // the deal and lands in our own pile — the worst Laisto outcome.
+            // Discarding it instead pushes the risk onto whoever captures it.
+            // Among equally harmless cards, shed the biggest one.
             nonCaptures
-            |> List.maxBy (fun e -> float (Cards.tableValue e.HandCard.Rank) - scoreFn e.HandCard * 10.0)
+            |> List.maxBy (fun e -> (scoreFn e.HandCard, float (Cards.tableValue e.HandCard.Rank)))
         else
             evals
             |> List.minBy (fun e -> (e.PointValue, float e.CardsCaptured, if e.IsSweep then 1.0 else 0.0))

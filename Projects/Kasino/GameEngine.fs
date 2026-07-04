@@ -199,30 +199,49 @@ module GameEngine =
         let chosenCard = player.Hand[cardIndex]
         let remainingHand = player.Hand |> List.removeAt cardIndex
 
-        let result, newTable =
-            match chosenOption with
-            | Some opt -> Rules.resolveCapture chosenCard opt state.Table
-            | None ->
-                let r, t, _ = Rules.playCard chosenCard state.Table
-                (r, t)
-
-        let eval =
+        let result, newTable, options =
             match chosenOption with
             | Some opt ->
-                match result with
-                | Capture(_, captured, isSweep) ->
-                    { AI.HandCard = chosenCard; AI.Result = result
-                      AI.PointValue = Rules.capturePointValue captured + (if isSweep then Rules.sweepBonus else 0.0)
-                      AI.CardsCaptured = captured.Length; AI.IsSweep = isSweep
-                      AI.CaptureOptions = []; AI.ChosenOption = Some opt }
-                | Place _ ->
-                    { AI.HandCard = chosenCard; AI.Result = result; AI.PointValue = 0.0
-                      AI.CardsCaptured = 0; AI.IsSweep = false
-                      AI.CaptureOptions = []; AI.ChosenOption = Some opt }
-            | None ->
-                AI.evaluatePlay chosenCard state.Table
+                let r, t = Rules.resolveCapture chosenCard opt state.Table
+                (r, t, [])
+            | None -> Rules.playCard chosenCard state.Table
+
+        // Describe the play that was actually applied — not the AI's
+        // preferred alternative, which can be a different option when
+        // several capture options overlap.
+        let eval =
+            match result with
+            | Capture(_, captured, isSweep) ->
+                { AI.HandCard = chosenCard; AI.Result = result
+                  AI.PointValue = Rules.capturePointValue (chosenCard :: captured) + (if isSweep then Rules.sweepBonus else 0.0)
+                  AI.CardsCaptured = captured.Length; AI.IsSweep = isSweep
+                  AI.CaptureOptions = options; AI.ChosenOption = chosenOption }
+            | Place _ ->
+                { AI.HandCard = chosenCard; AI.Result = result; AI.PointValue = 0.0
+                  AI.CardsCaptured = 0; AI.IsSweep = false
+                  AI.CaptureOptions = options; AI.ChosenOption = None }
 
         applyPlay state idx chosenCard remainingHand result newTable eval
+
+    /// Place the chosen card on the table without capturing. In Standard
+    /// Kasino capturing is optional, so this is a legal alternative even
+    /// when the card could capture. In Laisto capture is mandatory: a
+    /// capture-capable card falls back to the normal (capturing) play.
+    let playHumanPlaceTurn (state: GameState) (cardIndex: int) : TurnResult =
+        let idx = state.CurrentPlayerIndex
+        let player = state.Players[idx]
+        let chosenCard = player.Hand[cardIndex]
+        if state.Variant = LaistoKasino && Rules.canCapture chosenCard state.Table then
+            playHumanTurn state cardIndex None
+        else
+            let remainingHand = player.Hand |> List.removeAt cardIndex
+            let result = Place chosenCard
+            let newTable = chosenCard :: state.Table
+            let eval =
+                { AI.HandCard = chosenCard; AI.Result = result; AI.PointValue = 0.0
+                  AI.CardsCaptured = 0; AI.IsSweep = false
+                  AI.CaptureOptions = []; AI.ChosenOption = None }
+            applyPlay state idx chosenCard remainingHand result newTable eval
 
     /// Check if all players' hands are empty.
     let allHandsEmpty (state: GameState) =

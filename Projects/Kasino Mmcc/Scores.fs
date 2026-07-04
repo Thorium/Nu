@@ -107,14 +107,23 @@ type ScoreDispatcher () =
                     cell ("P" + string col + "_" + string i) v (colX col) (rowY i) (rowColor i) 10.0f JustifyCenter ]
 
         let winnerContent =
+            // An exact tie for the deciding score names every tied player
+            // rather than an arbitrary one.
             if not model.IsGameOver then []
             else
-                let pick = match model.Variant with StandardKasino -> List.maxBy snd | LaistoKasino -> List.minBy snd
                 match model.Cumulative |> Map.toList with
                 | [] -> []
                 | xs ->
-                    let name, score = pick xs
-                    [ cell "Winner" $"{name} wins with {score} points!" 0.0f -118.0f Clr.gold 13.0f JustifyCenter ]
+                    let bestScore =
+                        match model.Variant with
+                        | StandardKasino -> xs |> List.map snd |> List.max
+                        | LaistoKasino   -> xs |> List.map snd |> List.min
+                    let winners = xs |> List.filter (fun (_, s) -> s = bestScore) |> List.map fst
+                    let text =
+                        match winners with
+                        | [ w ] -> $"{w} wins with {bestScore} points!"
+                        | ws -> String.concat " & " ws + $" tie with {bestScore} points!"
+                    [ cell "Winner" text 0.0f -118.0f Clr.gold 13.0f JustifyCenter ]
 
         let title =
             if model.IsGameOver then "Game Over!" else $"Round {model.RoundNumber} Results"
