@@ -133,6 +133,8 @@ module Helpers =
         let gs = AppData.gs
         gs.Team1Idx <- AppData.selectedTeam1
         gs.Team2Idx <- AppData.selectedTeam2
+        gs.Team1Human <- (gs.Team1Idx = 0)
+        gs.Team2Human <- (gs.Team2Idx = 0)
         gs.NumPeriods <- ExhibitionPeriods
         setPlayerMode gs AppData.fivePlayerMode
         setTeamSpeeds ()
@@ -146,6 +148,8 @@ module Helpers =
             let t1, t2 = currentMatchup league
             gs.Team1Idx <- t1
             gs.Team2Idx <- t2
+            gs.Team1Human <- (t1 = league.HumanTeam)
+            gs.Team2Human <- false
             gs.NumPeriods <- LeaguePeriods
             setPlayerMode gs AppData.fivePlayerMode
             setTeamSpeeds ()

@@ -92,6 +92,8 @@ type GameState =
       mutable GoalScoredBy: GoalScoredBy
       mutable Team1Idx: int
       mutable Team2Idx: int
+      mutable Team1Human: bool
+      mutable Team2Human: bool
       mutable PeriodLength: int<sec>
       mutable CurrentPeriod: int
       mutable NumPeriods: int
@@ -200,6 +202,8 @@ let createGameState () : GameState =
       GoalScoredBy = NoGoal
       Team1Idx = 0
       Team2Idx = 1
+      Team1Human = true
+      Team2Human = false
       PeriodLength = PeriodMinutes * 60 * 1<sec>
       CurrentPeriod = 0
       NumPeriods = ExhibitionPeriods
@@ -271,6 +275,8 @@ let initMatch (gs: GameState) =
     gs.GoalFlashTimer <- 0<tick>
     gs.CurrentPeriod <- 0
     gs.Playing <- true
+    gs.Input1 <- Input.none
+    gs.Input2 <- Input.none
     gs.FireHoldTicks1 <- 0<tick>
     gs.FireHoldTicks2 <- 0<tick>
     let skipGoalie = if gs.FivePlayerMode then 1 else 0
@@ -680,7 +686,7 @@ let updateClock (gs: GameState) =
 let private processTeam
     (gs: GameState)
     isTeam1
-    teamIdx
+    isHuman
     activeIdx
     (input: Input)
     (holdTicks: int<tick> byref)
@@ -696,7 +702,7 @@ let private processTeam
         match role with
         | Goalie -> aiGoalie gs ei isTeam1
         | _ when ei = activeIdx ->
-            if teamIdx = 0 then
+            if isHuman then
                 applyHumanInput gs ei input &holdTicks
             else
                 aiActivePlayer gs ei isTeam1
@@ -730,16 +736,23 @@ let gameTick (gs: GameState) =
             let ppt = gs.PlayersPerTeam
             let t2s = gs.Team2Start
 
-            // Find nearest players to ball (skip goalie in 5-player mode)
+            // Active player: the holder while a skater has the ball,
+            // otherwise nearest to ball (skip goalie in 5-player mode)
             let skipGoalie = if gs.FivePlayerMode then 1 else 0
-            gs.ActivePlayer1 <- findNearestToBall gs skipGoalie (ppt - 1)
-            gs.ActivePlayer2 <- findNearestToBall gs (t2s + skipGoalie) (t2s + ppt - 1)
+
+            let activeFor startIdx =
+                match gs.BallState with
+                | HeldBy owner when owner >= startIdx + skipGoalie && owner < startIdx + ppt -> owner
+                | _ -> findNearestToBall gs (startIdx + skipGoalie) (startIdx + ppt - 1)
+
+            gs.ActivePlayer1 <- activeFor 0
+            gs.ActivePlayer2 <- activeFor t2s
 
             // Process both teams
             processTeam
                 gs
                 true
-                gs.Team1Idx
+                gs.Team1Human
                 gs.ActivePlayer1
                 gs.Input1
                 &gs.FireHoldTicks1
@@ -747,7 +760,7 @@ let gameTick (gs: GameState) =
             processTeam
                 gs
                 false
-                gs.Team2Idx
+                gs.Team2Human
                 gs.ActivePlayer2
                 gs.Input2
                 &gs.FireHoldTicks2
@@ -759,9 +772,11 @@ let gameTick (gs: GameState) =
 
                 if gs.PossessionTimer <= 0<tick> then
                     let ent = gs.Entities[owner]
-                    ent.VelX <- -ent.VelX
-                    ent.VelY <- -ent.VelY
+                    let vx = ent.VelX
+                    let vy = ent.VelY
                     releaseBall gs owner 1.0
+                    ent.VelX <- -vx
+                    ent.VelY <- -vy
             | Free -> ()
 
             // Ball friction: only every 8th tick (when BallFrictionCounter resets)
@@ -871,8 +886,8 @@ let gameTick (gs: GameState) =
             // Clock
             updateClock gs
 
-            // Period end check
-            if gs.ClockSeconds >= gs.PeriodLength then
+            // Period end check (deferred while a goal flash is showing)
+            if gs.ClockSeconds >= gs.PeriodLength && gs.GoalFlashTimer <= 0<tick> then
                 gs.CurrentPeriod <- gs.CurrentPeriod + 1
 
                 if gs.CurrentPeriod >= gs.NumPeriods then
