@@ -99,6 +99,9 @@ type GameState =
       mutable Team2Idx: int
       mutable Team1Human: bool
       mutable Team2Human: bool
+      // Puck release speed for the current match (hard mode shoots harder);
+      // set by the UI at match start alongside the team stats.
+      mutable ShotSpeed: float<subpx / tick>
       mutable PeriodLength: int<sec>
       mutable CurrentPeriod: int
       mutable NumPeriods: int
@@ -211,6 +214,7 @@ let createGameState () : GameState =
       Team2Idx = 1
       Team1Human = true
       Team2Human = false
+      ShotSpeed = ShotReleaseSpeed
       PeriodLength = PeriodMinutes * 60 * 1<sec>
       CurrentPeriod = 0
       NumPeriods = ExhibitionPeriods
@@ -322,16 +326,11 @@ let findNearestToBall (gs: GameState) startIdx endIdx =
 /// per frame). Prevents shooting and immediately picking the ball back up.
 let RecaptureCooldownTicks = 18<tick>
 
-/// Puck speed for a full-power release (subpx/tick). Every player shoots at
-/// the same speed for a given charge level, regardless of team/player stats
-/// or how fast the shooter is moving — matches the fastest teams' ShotPower.
-let ShotReleaseSpeed = 64.0<subpx / tick>
-
-/// powerFrac: 0.0..1.0 — fraction of ShotReleaseSpeed (pass vs full shot)
+/// powerFrac: 0.0..1.0 — fraction of the match's ShotSpeed (pass vs full shot)
 let releaseBall (gs: GameState) entityIdx (powerFrac: float) =
     let ent = gs.Entities[entityIdx]
     let ball = gs.Entities[gs.BallIdx]
-    let power = ShotReleaseSpeed * powerFrac
+    let power = gs.ShotSpeed * powerFrac
     ent.VelX <- zeroVel
     ent.VelY <- zeroVel
     ball.VelX <- dirToVel ent.DirX power

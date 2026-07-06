@@ -38,6 +38,7 @@ module AppData =
     let mutable fastHuman = true
     let mutable hardMode = false
     let mutable fivePlayerMode = false
+    let mutable gamepadEnabled = true
     let mutable league : LeagueState option = None
     let mutable frameTick = 0 // counts Nu frames for animation
 
@@ -129,6 +130,8 @@ module Helpers =
         applyTeam gs.Team1Idx 0 (AppData.fastHuman && t1Human) (not t1Human)
         applyTeam gs.Team2Idx gs.Team2Start (AppData.fastHuman && t2Human) (not t2Human)
 
+        gs.ShotSpeed <- if AppData.hardMode then HardShotReleaseSpeed else ShotReleaseSpeed
+
     let startExhibitionMatch () =
         let gs = AppData.gs
         gs.Team1Idx <- AppData.selectedTeam1
@@ -158,6 +161,42 @@ module Helpers =
     let matchOver () =
         let gs = AppData.gs
         not gs.Playing && gs.ClockSeconds >= gs.PeriodLength
+
+    // ─── Gamepad input ────────────────────────────────────────────────
+    // Left stick / d-pad (hat) to skate, A / B / right trigger to shoot.
+    // Pad 1 drives player 1, pad 2 drives player 2, merged with keyboard.
+
+    let GamepadDeadzone = 0.35f
+
+    /// Read pad `idx` as an Input snapshot (all-false when not connected).
+    let gamepadInput (idx: int) (world: World) : Input =
+        let stick = World.getStickLeft idx world // SDL convention: Y positive = down
+        let dir = World.getDirection idx world
+
+        { Left =
+            stick.X < -GamepadDeadzone
+            || (match dir with DirectionLeft | DirectionUpLeft | DirectionDownLeft -> true | _ -> false)
+          Right =
+            stick.X > GamepadDeadzone
+            || (match dir with DirectionRight | DirectionUpRight | DirectionDownRight -> true | _ -> false)
+          Up =
+            stick.Y < -GamepadDeadzone
+            || (match dir with DirectionUp | DirectionUpLeft | DirectionUpRight -> true | _ -> false)
+          Down =
+            stick.Y > GamepadDeadzone
+            || (match dir with DirectionDown | DirectionDownLeft | DirectionDownRight -> true | _ -> false)
+          Fire =
+            World.isButtonDown idx ButtonA world
+            || World.isButtonDown idx ButtonB world
+            || World.getTriggerRight idx world > 0.12f }
+
+    /// Combine keyboard and gamepad snapshots (either source counts).
+    let mergeInput (a: Input) (b: Input) : Input =
+        { Left = a.Left || b.Left
+          Right = a.Right || b.Right
+          Up = a.Up || b.Up
+          Down = a.Down || b.Down
+          Fire = a.Fire || b.Fire }
 
 // ─── Game Dispatcher ──────────────────────────────────────────────────
 type FsHockeyDispatcher () =
@@ -285,15 +324,17 @@ type FsHockeyDispatcher () =
         let fastStr = if AppData.fastHuman then "ON" else "OFF"
         let hardStr = if AppData.hardMode then "ON" else "OFF"
         let fiveStr = if AppData.fivePlayerMode then "6v6" else "3v3"
+        let padStr = if AppData.gamepadEnabled then "ON" else "OFF"
         let instrY = 210.0f
 
         let instrLines =
             [| "UP/DOWN = Select Team  |  TAB = Switch Column"
                "ENTER = Start Game  |  L = Play League  |  ESC = Quit"
                $"F = Fast Human [{fastStr}]  |  H = Hard Mode [{hardStr}]  |  5 = Players [{fiveStr}]"
+               $"G = Gamepad [{padStr}]"
                "Hold shoot key longer for harder shot, quick tap for a pass"
-               "Player 1: Arrow Keys + RShift/Enter to shoot"
-               "Player 2: WASD + Space/Tab to shoot"
+               "Player 1: Arrow Keys + RShift/Enter, or Gamepad 1"
+               "Player 2: WASD + Space/Tab, or Gamepad 2"
                "(Set team to HUMAN PLAYER for keyboard control)" |]
 
         for i in 0 .. instrLines.Length - 1 do
@@ -340,6 +381,9 @@ type FsHockeyDispatcher () =
             if World.isKeyboardKeyPressed KeyboardKey.Num5 world then
                 AppData.fivePlayerMode <- not AppData.fivePlayerMode
 
+            if World.isKeyboardKeyPressed KeyboardKey.G world then
+                AppData.gamepadEnabled <- not AppData.gamepadEnabled
+
             if World.isKeyboardKeyPressed KeyboardKey.Escape world && world.Unaccompanied then
                 World.exit world
 
@@ -357,6 +401,9 @@ type FsHockeyDispatcher () =
                   Down = World.isKeyboardKeyDown KeyboardKey.Down world
                   Fire = World.isKeyboardKeyDown KeyboardKey.RShift world || World.isKeyboardKeyDown KeyboardKey.Enter world }
 
+            if AppData.gamepadEnabled then
+                gs.Input1 <- Helpers.mergeInput gs.Input1 (Helpers.gamepadInput 0 world)
+
             // Player 2: WASD + Space/Tab (only in exhibition)
             if not leagueMode then
                 gs.Input2 <-
@@ -365,6 +412,9 @@ type FsHockeyDispatcher () =
                       Up = World.isKeyboardKeyDown KeyboardKey.W world
                       Down = World.isKeyboardKeyDown KeyboardKey.S world
                       Fire = World.isKeyboardKeyDown KeyboardKey.Space world || World.isKeyboardKeyDown KeyboardKey.Tab world }
+
+                if AppData.gamepadEnabled then
+                    gs.Input2 <- Helpers.mergeInput gs.Input2 (Helpers.gamepadInput 1 world)
 
             // Run physics ticks (1 per frame for Nu's ~60fps, not PhysicsTicksPerFrame=2 which was for 30fps WinForms)
             gameTick gs

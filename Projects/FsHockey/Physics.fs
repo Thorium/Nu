@@ -124,6 +124,13 @@ let BallAnimFrames = 8
 let PassPowerFraction = 0.4
 let ChargeTicksForFull = 18<tick>
 
+/// Puck speed for a full-power release (subpx/tick). Every player shoots at
+/// the same speed for a given charge level, regardless of team/player stats
+/// or how fast the shooter is moving. Normal mode is a touch slower than
+/// hard mode (which matches the fastest teams' ShotPower).
+let ShotReleaseSpeed = 60.0<subpx / tick>
+let HardShotReleaseSpeed = 64.0<subpx / tick>
+
 // ─── Collision ─────────────────────────────────────────────────────────
 // |x1-x2| <= 7 and |y1-y2| <= 7 (AABB half-size = 7 px).
 // Using < 8.0 to match <= 7 for integer pixel coordinates.
