@@ -48,7 +48,9 @@ let GoalTop = 56.0<px>
 let GoalBottom = 104.0<px>
 let GoalLeftX = 10.0<px>
 let GoalRightX = 294.0<px>
-let CenterX = 144.0<px>
+// True field center: (FieldLeft + FieldRight) / 2. The faceoff ball spawns
+// here; if it is off-center one team is closer to it and wins every faceoff.
+let CenterX = 152.0<px>
 let CenterY = 80.0<px>
 let GoalDepth = 12.0<px>
 
@@ -147,13 +149,11 @@ let TrailMarkLifetime = 90<tick>
 // ─── Possession ────────────────────────────────────────────────────────
 
 let PossessionTimer = 200<tick>
-let StalemateWarn = 400<tick>
 let StalemateFaceoff = 500<tick>
 
 // ─── AI Constants ──────────────────────────────────────────────────────
 
 let AiShootZoneX = 69.0<px>
-let AiDefenderShift = 28.0<px>
 let AiRandomShot = 8.0
 
 /// Minimum distance before same-team players start repelling each other
@@ -161,14 +161,53 @@ let TeammateSeparationDist = 18.0<px>
 /// Velocity nudge applied per tick when teammates overlap
 let TeammateSeparationForce = 2.0<subpx / tick>
 
-/// AI shoot timing checkpoints (possession_timer == value triggers shot)
-let AiShootCheckpoints =
-    set [| 175<tick>; 150<tick>; 125<tick>; 100<tick>; 20<tick> |]
+// AI puck-carrier behaviour (CPU active player holding the puck)
+
+/// Opponent this close counts as immediate pressure (pass or back off)
+let AiPressureDist = 26.0<px>
+/// Opponent within this distance on the goal side counts as blocking
+let AiBlockDist = 42.0<px>
+/// A teammate is "open" if the nearest opponent is further than this
+let AiMateOpenDist = 24.0<px>
+/// Pass range: don't pass to a teammate closer/further than this
+let AiPassMinDist = 24.0<px>
+let AiPassMaxDist = 130.0<px>
+/// Puck speed fraction for an AI pass (between tap-pass and full shot)
+let AiPassPowerFraction = 0.6
+/// Forced shot when the possession timer runs this low (the timer starts
+/// at PossessionTimer and force-releases at 0; shoot just before that)
+let AiForcedShotTimer = 30<tick>
+/// For this long after gaining the puck the CPU carrier rushes toward the
+/// opponent goal (dodging around blockers) instead of passing or backing off
+let AiInitialRushTicks = 120<tick>
+/// How far short of the end boards the carrier aims while rushing
+let AiCarryTargetMargin = 30.0<px>
+
+// AI wander: random offset added to non-carrier AI target positions so
+// players don't all skate to exactly the same spot every time.
+
+/// Maximum wander offset in each axis
+let AiWanderRange = 14.0<px>
+/// Ticks between re-rolls of each player's wander offset
+let AiWanderIntervalTicks = 40<tick>
+
+/// Hysteresis for human-team active-player selection: the control marker
+/// only jumps to a teammate at least this many px closer to the ball, so
+/// control doesn't thrash between players and the player being steered is
+/// never handed to the AI mid-move (CPU teams switch on exact nearest)
+let AiActiveSwitchMargin = 24.0<px>
+
+/// Skating speed shown in the menu for a team, with the current fast-human
+/// and hard-mode settings applied (same formula the match setup uses)
+let displayedTeamSpeed (fastHuman: bool) (hardMode: bool) (teamIdx: int) =
+    let srcIdx = if fastHuman && teamIdx = 0 then humanFastTeamIdx else teamIdx
+    let mult = if hardMode && teamIdx <> 0 then HardModeSpeedMult else 1.0
+    int (teamMaxSpeed.[srcIdx].[1] * mult)
 
 // ─── Game Timing ───────────────────────────────────────────────────────
 // Game loop runs at CGA vertical retrace rate (~60 Hz).
-// tick_countdown=2 halves the CLOCK (1 clock-second every 2 game ticks).
 // We render at 30 FPS with 2 physics ticks per frame -> ~60 Hz effective.
+// The game clock advances 1 clock-second every ClockTicksPerSec ticks.
 
 [<Literal>]
 let GameFps = 30
@@ -179,7 +218,8 @@ let PhysicsTicksPerFrame = 2
 [<Literal>]
 let PeriodMinutes = 1
 
-/// Clock increments every 2 game ticks at ~60 Hz -> 30 clock-seconds/real-second.
+/// Clock advances 1 clock-second every 30 game ticks; at ~60 Hz that is
+/// 2 clock-seconds per real second (a 60-clock-second period lasts ~30 real seconds).
 let ClockTicksPerSec = 30<tick / sec>
 
 // ─── Periods ──────────────────────────────────────────────────────────
@@ -210,26 +250,32 @@ let teamNames =
 // 5-player mode adds: goalie (idx 0), wings (idx 3,4)
 // Team 1 (left side), Team 2 (right side, mirrored)
 
-// 3-player positions (indices 0-2 in 3-player mode)
+// 3-player positions (indices 0-2 in 3-player mode).
+// Team 2 X values are exact mirrors of team 1 (304 - x) so neither team
+// starts closer to the faceoff spot.
 let team1HomeX = [| 100.0<px>; 60.0<px>; 180.0<px> |]
 let team1HomeY = [| 80.0<px>; 50.0<px>; 110.0<px> |]
-let team2HomeX = [| 200.0<px>; 240.0<px>; 120.0<px> |]
+let team2HomeX = [| 204.0<px>; 244.0<px>; 124.0<px> |]
 let team2HomeY = [| 80.0<px>; 50.0<px>; 110.0<px> |]
 
-// Shifted positions when team has ball (offset by AiDefenderShift toward opponent goal)
-let team1HomeXAttack = [| 72.0<px>; 32.0<px>; 152.0<px> |]
-let team2HomeXAttack = [| 228.0<px>; 268.0<px>; 148.0<px> |]
+// Shifted positions when team has ball (offset toward opponent goal).
+// Team 1 attacks right (larger X), team 2 attacks left (smaller X):
+// center pushes up to a forward spot, forward goes deep, defender holds
+// around center ice as the safety valve.
+let team1HomeXAttack = [| 190.0<px>; 235.0<px>; 150.0<px> |]
+let team2HomeXAttack = [| 114.0<px>; 69.0<px>; 154.0<px> |]
 
 // 5-player mode extra positions (5 skaters + goalie = 6 per team)
 // Index layout: 0=goalie, 1=center, 2=forward, 3=wing-top, 4=wing-bottom, 5=extra-fwd
 let team1HomeX5 = [| 20.0<px>; 100.0<px>; 60.0<px>; 140.0<px>; 140.0<px>; 80.0<px> |]
 let team1HomeY5 = [| 80.0<px>; 80.0<px>; 50.0<px>; 40.0<px>; 120.0<px>; 110.0<px> |]
-let team2HomeX5 = [| 284.0<px>; 200.0<px>; 240.0<px>; 164.0<px>; 164.0<px>; 220.0<px> |]
+let team2HomeX5 = [| 284.0<px>; 204.0<px>; 244.0<px>; 164.0<px>; 164.0<px>; 224.0<px> |]
 let team2HomeY5 = [| 80.0<px>; 80.0<px>; 50.0<px>; 40.0<px>; 120.0<px>; 110.0<px> |]
 
-// 5-player attack positions
-let team1HomeX5Attack = [| 20.0<px>; 72.0<px>; 32.0<px>; 180.0<px>; 180.0<px>; 52.0<px> |]
-let team2HomeX5Attack = [| 284.0<px>; 228.0<px>; 268.0<px>; 124.0<px>; 124.0<px>; 248.0<px> |]
+// 5-player attack positions (toward the opponent goal; goalie stays home,
+// center mid pushes up to a forward spot alongside the forward)
+let team1HomeX5Attack = [| 20.0<px>; 195.0<px>; 230.0<px>; 180.0<px>; 180.0<px>; 165.0<px> |]
+let team2HomeX5Attack = [| 284.0<px>; 109.0<px>; 74.0<px>; 124.0<px>; 124.0<px>; 139.0<px> |]
 
 // Goalie patrol area (stays near own goal)
 let GoaliePatrolXLeft = 20.0<px>

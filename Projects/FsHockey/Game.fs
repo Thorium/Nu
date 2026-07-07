@@ -1,23 +1,58 @@
-/// THE FS HOCKEY LEAGUE — Game Logic
+/// THE FS HOCKEY LEAGUE — Game Logic (immutable, Nu/ImSim edition)
 /// Entity update, AI, human input, collision, ball physics, scoring.
 /// Taking influence from Solar Hockey by Galifir Developments (Harm Hanemaayer & John Remyn, 1990-1992)
+///
+/// Unlike the WinForms/MonoGame/FableWeb branches (which mutate a shared
+/// GameState in place), this edition models the whole match as an immutable
+/// value: `gameTick` is a pure `Input -> Input -> Match -> Match` function and
+/// even the PRNG is a value carried inside the state. Storing the Match in a
+/// Nu simulant property therefore gives live gameplay undo/redo in the editor
+/// for free — rewinding restores the exact simulation state, RNG included.
 module HockeyDemo.Game
 
-open System
 open HockeyDemo.Physics
+
+// ─── Pure PRNG ─────────────────────────────────────────────────────────
+// xorshift64 carried as a value in the match state, so randomness is part
+// of the immutable simulation state (deterministic, undo/redo-safe).
+
+[<Struct>]
+type Rand = Rand of uint64
+
+[<RequireQualifiedAccess>]
+module Rand =
+
+    let make (seed: uint64) =
+        Rand (if seed = 0UL then 0x9E3779B97F4A7C15UL else seed)
+
+    let next (Rand x) =
+        let x = x ^^^ (x <<< 13)
+        let x = x ^^^ (x >>> 7)
+        let x = x ^^^ (x <<< 17)
+        Rand x
+
+    /// Advance and return a float in [0, 1).
+    let nextFloat r =
+        let (Rand x) as r' = next r
+        r', float (x >>> 11) * (1.0 / 9007199254740992.0)
+
+    /// Advance and return an int in [0, n).
+    let nextInt (n: int) r =
+        let r', f = nextFloat r
+        r', int (f * float n)
 
 // ─── Types ─────────────────────────────────────────────────────────────
 
 type Entity =
-    { mutable X: float<px>
-      mutable Y: float<px>
-      mutable VelX: float<subpx / tick>
-      mutable VelY: float<subpx / tick>
-      mutable DirX: float
-      mutable DirY: float
-      mutable MaxSpeed: float<subpx / tick>
-      mutable Accel: float<subpx / tick>
-      mutable ShotPower: float<subpx / tick> }
+    { X: float<px>
+      Y: float<px>
+      VelX: float<subpx / tick>
+      VelY: float<subpx / tick>
+      DirX: float
+      DirY: float
+      MaxSpeed: float<subpx / tick>
+      Accel: float<subpx / tick>
+      ShotPower: float<subpx / tick> }
 
 [<Struct>]
 type BallState =
@@ -33,9 +68,9 @@ type GoalScoredBy =
 
 /// A skate mark left on the ice during a tight turn
 type TrailMark =
-    { mutable X: float<px>
-      mutable Y: float<px>
-      mutable Life: int<tick> }
+    { MarkX: float<px>
+      MarkY: float<px>
+      Life: int<tick> }
 
 /// Player role for 5-player mode AI dispatch
 [<Struct>]
@@ -52,88 +87,76 @@ type Input =
 module Input =
     let none = { Left = false; Right = false; Up = false; Down = false; Fire = false }
 
-// ─── League / Tournament Types ─────────────────────────────────────────
+// ─── Match State (immutable) ───────────────────────────────────────────
 
-type TeamStats =
-    { mutable Wins: int
-      mutable Losses: int
-      mutable Draws: int
-      mutable Points: int
-      mutable GoalsFor: int
-      mutable GoalsAgainst: int }
-
-type LeagueState =
-    { Stats: TeamStats array
-      /// Full round-robin: Schedule[round] = array of (team1, team2) matchups
-      Schedule: (int * int) array array
-      Rng: Random
-      mutable CurrentRound: int
-      mutable Finished: bool
-      HumanTeam: int }
-
-type GameState =
-    { Entities: Entity array
-      Rng: Random
-      mutable Team1Score: int
-      mutable Team2Score: int
-      mutable ClockSeconds: int<sec>
-      mutable ClockTick: int<tick>
-      mutable BallState: BallState
-      mutable PossessionTimer: int<tick>
+type Match =
+    { Entities: Entity array          // never mutated in place: copy-on-write
+      Rand: Rand
+      Team1Score: int
+      Team2Score: int
+      ClockSeconds: int<sec>
+      ClockTick: int<tick>
+      BallState: BallState
+      PossessionTimer: int<tick>
       // Shot re-capture cooldown: after a player releases the ball, that
       // player (and only that player) cannot re-capture it for a short
       // window, so you cannot pass to yourself.
-      mutable LastReleaser: int
-      mutable RecaptureBlockTicks: int<tick>
-      mutable StalemateCounter: int<tick>
-      mutable PrevBallState: BallState
-      mutable ActivePlayer1: int
-      mutable ActivePlayer2: int
-      mutable BallAnimFrame: int
-      mutable BallFrictionCounter: int
-      mutable GameTick: int<tick>
-      mutable Playing: bool
-      mutable GoalFlashTimer: int<tick>
-      mutable GoalScoredBy: GoalScoredBy
-      mutable Team1Idx: int
-      mutable Team2Idx: int
-      mutable Team1Human: bool
-      mutable Team2Human: bool
-      // Puck release speed for the current match (hard mode shoots harder);
-      // set by the UI at match start alongside the team stats.
-      mutable ShotSpeed: float<subpx / tick>
-      mutable PeriodLength: int<sec>
-      mutable CurrentPeriod: int
-      mutable NumPeriods: int
-      // Dynamic player layout
-      mutable PlayersPerTeam: int
-      mutable FivePlayerMode: bool
-      // Keyboard state (one input snapshot per player)
-      mutable Input1: Input
-      mutable Input2: Input
-      // Shoot charge
-      mutable FireHoldTicks1: int<tick>
-      mutable FireHoldTicks2: int<tick>
+      LastReleaser: int
+      RecaptureBlockTicks: int<tick>
+      StalemateCounter: int<tick>
+      PrevBallState: BallState
+      ActivePlayer1: int
+      ActivePlayer2: int
+      BallFrictionCounter: int
+      GameTick: int<tick>
+      Playing: bool
+      GoalFlashTimer: int<tick>
+      GoalScoredBy: GoalScoredBy
+      Team1Idx: int
+      Team2Idx: int
+      Team1Human: bool
+      Team2Human: bool
+      ShotSpeed: float<subpx / tick>
+      PeriodLength: int<sec>
+      CurrentPeriod: int
+      NumPeriods: int
+      PlayersPerTeam: int
+      FivePlayerMode: bool
+      // Shoot charge (hold fire for a harder shot)
+      FireHoldTicks1: int<tick>
+      FireHoldTicks2: int<tick>
       // Stick animation timer per entity
-      mutable StickAnimTimers: int array
-      // Ice trail: skate marks from tight turns
+      StickAnimTimers: int array
+      // AI wander: per-player random target offset, re-rolled periodically
+      WanderX: float<px> array
+      WanderY: float<px> array
+      WanderTimer: int<tick>
+      // Ice trail: skate marks from tight turns (circular buffer)
       TrailMarks: TrailMark array
-      mutable TrailMarkCount: int
-      mutable TrailMarkHead: int       // circular buffer write index
-      PrevDirX: float array            // previous direction per entity
+      TrailMarkCount: int
+      TrailMarkHead: int
+      PrevDirX: float array
       PrevDirY: float array }
 
-    // Layout derived from the team size. Computed members rather than stored
-    // fields so they cannot drift out of sync with PlayersPerTeam.
-    member s.NumPlayers = s.PlayersPerTeam * 2
-    member s.Team2Start = s.PlayersPerTeam
-    member s.BallIdx = s.PlayersPerTeam * 2
-    member s.NumEntities = s.PlayersPerTeam * 2 + 1
+    // Layout derived from the team size.
+    member m.NumPlayers = m.PlayersPerTeam * 2
+    member m.Team2Start = m.PlayersPerTeam
+    member m.BallIdx = m.PlayersPerTeam * 2
+    member m.NumEntities = m.PlayersPerTeam * 2 + 1
+
+/// Everything needed to set up a match; the UI builds this from its settings.
+type MatchConfig =
+    { Team1Idx: int
+      Team2Idx: int
+      Team1Human: bool
+      Team2Human: bool
+      FivePlayer: bool
+      FastHuman: bool
+      HardMode: bool
+      NumPeriods: int
+      Seed: uint64 }
 
 // ─── Helpers ───────────────────────────────────────────────────────────
-
-let inline private zero<[<Measure>] 'u> =
-    LanguagePrimitives.FloatWithMeasure<'u> 0.0
 
 let private zeroVel = 0.0<subpx / tick>
 
@@ -146,52 +169,112 @@ let playerRole (fivePlayer: bool) (localIdx: int) =
     | true, _       -> Forward          // indices 1, 2, 5 = forwards
 
 /// Is the entity on team 1?
-let inline isOnTeam1 (gs: GameState) idx = idx < gs.Team2Start
+let inline isOnTeam1 (m: Match) idx = idx < m.Team2Start
 
 /// Does the given team own the ball?
-let teamOwnsBall (gs: GameState) isTeam1 =
-    match gs.BallState with
-    | HeldBy owner ->
-        if isTeam1 then
-            isOnTeam1 gs owner
-        else
-            not (isOnTeam1 gs owner)
+let teamOwnsBall (m: Match) isTeam1 =
+    match m.BallState with
+    | HeldBy owner -> if isTeam1 then isOnTeam1 m owner else not (isOnTeam1 m owner)
     | Free -> false
 
 /// Does the opponent team own the ball?
-let opponentOwnsBall (gs: GameState) isTeam1 = teamOwnsBall gs (not isTeam1)
+let opponentOwnsBall (m: Match) isTeam1 = teamOwnsBall m (not isTeam1)
 
 /// Sign-based velocity from a direction component
-let inline private dirToVel (dir: float) (power: float<subpx / tick>) =
+let private dirToVel (dir: float) (power: float<subpx / tick>) =
     if dir > 0.0 then power
     elif dir < 0.0 then -power
     else zeroVel
 
-// ─── Factory ───────────────────────────────────────────────────────────
+/// Replace entity `i` with `f entity` (copy-on-write).
+let inline private withEnt i f (m: Match) =
+    let ents = Array.copy m.Entities
+    ents[i] <- f ents[i]
+    { m with Entities = ents }
 
-let createEntity maxSpd accel shotPwr : Entity =
-    { X = 0.0<px>
-      Y = 0.0<px>
-      VelX = zeroVel
-      VelY = zeroVel
-      DirX = 0.0
-      DirY = 0.0
-      MaxSpeed = maxSpd
-      Accel = accel
-      ShotPower = shotPwr }
+// ─── Position Reset (faceoff) ──────────────────────────────────────────
 
-let createGameState () : GameState =
-    let ppt = PlayersPerTeam3
+let resetPositions (m: Match) =
+    let homesX1, homesY1, homesX2, homesY2 =
+        if m.FivePlayerMode
+        then team1HomeX5, team1HomeY5, team2HomeX5, team2HomeY5
+        else team1HomeX, team1HomeY, team2HomeX, team2HomeY
 
-    let ents =
-        Array.init MaxEntities (fun i ->
-            if i < MaxPlayersPerTeam * 2 then
-                createEntity zeroVel ForwardAccel zeroVel
-            else
-                createEntity BallMaxSpeed zeroVel zeroVel)
+    let placeTeam startIdx (hx: float<px> array) (hy: float<px> array) dirX (ents: Entity array) =
+        for i in 0 .. m.PlayersPerTeam - 1 do
+            ents[startIdx + i] <-
+                { ents[startIdx + i] with
+                    X = hx[i]; Y = hy[i]
+                    VelX = zeroVel; VelY = zeroVel
+                    DirX = dirX; DirY = 0.0 }
 
-    { Entities = ents
-      Rng = Random()
+    // Small random jitter so faceoff races aren't decided the same way
+    // every time (with exact spawn + symmetric positions it's always a tie)
+    let rand, jx = Rand.nextFloat m.Rand
+    let rand, jy = Rand.nextFloat rand
+
+    let ents = Array.copy m.Entities
+    placeTeam 0 homesX1 homesY1 1.0 ents
+    placeTeam m.Team2Start homesX2 homesY2 -1.0 ents
+    ents[m.BallIdx] <-
+        { ents[m.BallIdx] with
+            X = CenterX + (jx * 2.0 - 1.0) * 6.0<px>
+            Y = CenterY + (jy * 2.0 - 1.0) * 6.0<px>
+            VelX = zeroVel; VelY = zeroVel }
+
+    { m with
+        Entities = ents
+        Rand = rand
+        BallState = Free
+        PossessionTimer = 0<tick>
+        LastReleaser = -1
+        RecaptureBlockTicks = 0<tick>
+        StalemateCounter = 0<tick>
+        PrevBallState = Free
+        BallFrictionCounter = BallAnimFrames }
+
+// ─── Match Creation ────────────────────────────────────────────────────
+
+let createMatch (cfg: MatchConfig) : Match =
+    let ppt = if cfg.FivePlayer then PlayersPerTeam5 else PlayersPerTeam3
+
+    // Per-player stats, mirroring the classic setTeamSpeeds: team 0 is the
+    // human-stats team ("fast human" borrows Moon's stats); CPU teams get the
+    // hard-mode multiplier when enabled.
+    let mkPlayer teamIdx localIdx =
+        let isHumanTeam = teamIdx = 0
+        let srcIdx = if cfg.FastHuman && isHumanTeam then humanFastTeamIdx else teamIdx
+        let mult = if not isHumanTeam && cfg.HardMode then HardModeSpeedMult else 1.0
+        let statIdx =
+            if cfg.FivePlayer then
+                match localIdx with
+                | 0 -> 0
+                | i when i <= 2 -> min i 2
+                | _ -> 2
+            else min localIdx 2
+        let isGoalie = localIdx = 0 && cfg.FivePlayer
+        let maxSpeed = teamMaxSpeed[srcIdx][statIdx] * mult
+        { X = 0.0<px>; Y = 0.0<px>
+          VelX = zeroVel; VelY = zeroVel
+          DirX = 0.0; DirY = 0.0
+          MaxSpeed = (if isGoalie then min maxSpeed GoalieMaxSpeed else maxSpeed)
+          Accel = (if isGoalie then GoalieAccel else ForwardAccel) * mult
+          ShotPower = teamShotPower[srcIdx][statIdx] * mult }
+
+    let entities =
+        [| for i in 0 .. ppt - 1 do mkPlayer cfg.Team1Idx i
+           for i in 0 .. ppt - 1 do mkPlayer cfg.Team2Idx i
+           // the ball
+           { X = 0.0<px>; Y = 0.0<px>
+             VelX = zeroVel; VelY = zeroVel
+             DirX = 0.0; DirY = 0.0
+             MaxSpeed = BallMaxSpeed; Accel = zeroVel; ShotPower = zeroVel } |]
+
+    let skipGoalie = if cfg.FivePlayer then 1 else 0
+    let numEntities = ppt * 2 + 1
+
+    { Entities = entities
+      Rand = Rand.make cfg.Seed
       Team1Score = 0
       Team2Score = 0
       ClockSeconds = 0<sec>
@@ -202,374 +285,423 @@ let createGameState () : GameState =
       RecaptureBlockTicks = 0<tick>
       StalemateCounter = 0<tick>
       PrevBallState = Free
-      ActivePlayer1 = 0
-      ActivePlayer2 = ppt
-      BallAnimFrame = BallAnimFrames
+      ActivePlayer1 = skipGoalie
+      ActivePlayer2 = ppt + skipGoalie
       BallFrictionCounter = BallAnimFrames
       GameTick = 0<tick>
-      Playing = false
+      Playing = true
       GoalFlashTimer = 0<tick>
       GoalScoredBy = NoGoal
-      Team1Idx = 0
-      Team2Idx = 1
-      Team1Human = true
-      Team2Human = false
-      ShotSpeed = ShotReleaseSpeed
+      Team1Idx = cfg.Team1Idx
+      Team2Idx = cfg.Team2Idx
+      Team1Human = cfg.Team1Human
+      Team2Human = cfg.Team2Human
+      ShotSpeed = (if cfg.HardMode then HardShotReleaseSpeed else ShotReleaseSpeed)
       PeriodLength = PeriodMinutes * 60 * 1<sec>
       CurrentPeriod = 0
-      NumPeriods = ExhibitionPeriods
+      NumPeriods = cfg.NumPeriods
       PlayersPerTeam = ppt
-      FivePlayerMode = false
-      Input1 = Input.none
-      Input2 = Input.none
+      FivePlayerMode = cfg.FivePlayer
       FireHoldTicks1 = 0<tick>
       FireHoldTicks2 = 0<tick>
-      StickAnimTimers = Array.zeroCreate MaxEntities
-      TrailMarks = Array.init MaxTrailMarks (fun _ -> { X = 0.0<px>; Y = 0.0<px>; Life = 0<tick> })
+      StickAnimTimers = Array.zeroCreate numEntities
+      WanderX = Array.zeroCreate numEntities
+      WanderY = Array.zeroCreate numEntities
+      WanderTimer = 0<tick>
+      TrailMarks = Array.init MaxTrailMarks (fun _ -> { MarkX = 0.0<px>; MarkY = 0.0<px>; Life = 0<tick> })
       TrailMarkCount = 0
       TrailMarkHead = 0
-      PrevDirX = Array.zeroCreate MaxEntities
-      PrevDirY = Array.zeroCreate MaxEntities }
+      PrevDirX = Array.zeroCreate numEntities
+      PrevDirY = Array.zeroCreate numEntities }
+    |> resetPositions
 
-// ─── Set Player Mode ──────────────────────────────────────────────────
-
-let setPlayerMode (gs: GameState) fivePlayer =
-    let ppt = if fivePlayer then PlayersPerTeam5 else PlayersPerTeam3
-    gs.PlayersPerTeam <- ppt
-    gs.FivePlayerMode <- fivePlayer
-    // Entity indices change between modes — drop any stale re-capture block
-    gs.LastReleaser <- -1
-    gs.RecaptureBlockTicks <- 0<tick>
-    // Ensure ball entity has correct stats
-    let ball = gs.Entities[gs.BallIdx]
-    ball.MaxSpeed <- BallMaxSpeed
-    ball.Accel <- zeroVel
-    ball.ShotPower <- zeroVel
-
-// ─── Position Reset ────────────────────────────────────────────────────
-
-let private resetTeamPositions (gs: GameState) startIdx (homeX: float<px> array) (homeY: float<px> array) dirX =
-    for i in 0 .. gs.PlayersPerTeam - 1 do
-        let e = gs.Entities[startIdx + i]
-        e.X <- homeX[i]
-        e.Y <- homeY[i]
-        e.VelX <- zeroVel
-        e.VelY <- zeroVel
-        e.DirX <- dirX
-        e.DirY <- 0.0
-
-let resetPositions (gs: GameState) =
-    if gs.FivePlayerMode then
-        resetTeamPositions gs 0 team1HomeX5 team1HomeY5 1.0
-        resetTeamPositions gs gs.Team2Start team2HomeX5 team2HomeY5 -1.0
-    else
-        resetTeamPositions gs 0 team1HomeX team1HomeY 1.0
-        resetTeamPositions gs gs.Team2Start team2HomeX team2HomeY -1.0
-
-    let ball = gs.Entities[gs.BallIdx]
-    ball.X <- CenterX
-    ball.Y <- CenterY
-    ball.VelX <- zeroVel
-    ball.VelY <- zeroVel
-    gs.BallState <- Free
-    gs.PossessionTimer <- 0<tick>
-    gs.LastReleaser <- -1
-    gs.RecaptureBlockTicks <- 0<tick>
-    gs.StalemateCounter <- 0<tick>
-    gs.PrevBallState <- Free
-    gs.BallAnimFrame <- BallAnimFrames
-    gs.BallFrictionCounter <- BallAnimFrames
-
-// ─── Init Match ────────────────────────────────────────────────────────
-
-let initMatch (gs: GameState) =
-    gs.Team1Score <- 0
-    gs.Team2Score <- 0
-    gs.ClockSeconds <- 0<sec>
-    gs.ClockTick <- 0<tick>
-    gs.GameTick <- 0<tick>
-    gs.GoalFlashTimer <- 0<tick>
-    gs.CurrentPeriod <- 0
-    gs.Playing <- true
-    gs.Input1 <- Input.none
-    gs.Input2 <- Input.none
-    gs.FireHoldTicks1 <- 0<tick>
-    gs.FireHoldTicks2 <- 0<tick>
-    let skipGoalie = if gs.FivePlayerMode then 1 else 0
-    gs.ActivePlayer1 <- skipGoalie
-    gs.ActivePlayer2 <- gs.Team2Start + skipGoalie
-    resetPositions gs
+/// Is the match over? (not playing, clock expired)
+let matchOver (m: Match) =
+    not m.Playing && m.ClockSeconds >= m.PeriodLength
 
 // ─── Find Nearest Player to Ball ───────────────────────────────────────
 
-let findNearestToBall (gs: GameState) startIdx endIdx =
-    let ball = gs.Entities[gs.BallIdx]
-    let mutable bestDist = Double.MaxValue
+let findNearestToBall (m: Match) startIdx endIdx =
+    let ball = m.Entities[m.BallIdx]
+    let mutable bestDist = System.Double.MaxValue
     let mutable bestIdx = startIdx
-
-    for i in startIdx..endIdx do
-        let e = gs.Entities[i]
+    for i in startIdx .. endIdx do
+        let e = m.Entities[i]
         let dx = float (e.X - ball.X)
         let dy = float (e.Y - ball.Y)
         let d = dx * dx + dy * dy
-
         if d < bestDist then
             bestDist <- d
             bestIdx <- i
-
     bestIdx
 
 // ─── Release Ball (kick/shoot) ─────────────────────────────────────────
 
 /// Ticks a player is blocked from re-capturing the ball after releasing it.
-/// 18 ticks = 0.3 s at the ~60 Hz physics rate (30 FPS x 2 physics ticks
-/// per frame). Prevents shooting and immediately picking the ball back up.
 let RecaptureCooldownTicks = 18<tick>
 
 /// powerFrac: 0.0..1.0 — fraction of the match's ShotSpeed (pass vs full shot)
-let releaseBall (gs: GameState) entityIdx (powerFrac: float) =
-    let ent = gs.Entities[entityIdx]
-    let ball = gs.Entities[gs.BallIdx]
-    let power = gs.ShotSpeed * powerFrac
-    ent.VelX <- zeroVel
-    ent.VelY <- zeroVel
-    ball.VelX <- dirToVel ent.DirX power
-    ball.VelY <- dirToVel ent.DirY power
-    gs.BallState <- Free
-    gs.BallAnimFrame <- BallAnimFrames
-    gs.BallFrictionCounter <- BallAnimFrames
-    // Block the releaser (and only them) from re-capturing for a short
-    // window, starting the very tick the ball leaves the stick.
-    gs.LastReleaser <- entityIdx
-    gs.RecaptureBlockTicks <- RecaptureCooldownTicks
-    gs.StickAnimTimers[entityIdx] <- 10
+let releaseBall idx (powerFrac: float) (m: Match) =
+    let ent = m.Entities[idx]
+    let power = m.ShotSpeed * powerFrac
+    let ents = Array.copy m.Entities
+    ents[idx] <- { ent with VelX = zeroVel; VelY = zeroVel }
+    ents[m.BallIdx] <-
+        { ents[m.BallIdx] with
+            VelX = dirToVel ent.DirX power
+            VelY = dirToVel ent.DirY power }
+    let sticks = Array.copy m.StickAnimTimers
+    sticks[idx] <- 10
+    { m with
+        Entities = ents
+        BallState = Free
+        BallFrictionCounter = BallAnimFrames
+        LastReleaser = idx
+        RecaptureBlockTicks = RecaptureCooldownTicks
+        StickAnimTimers = sticks }
 
-// ─── Apply Friction ────────────────────────────────────────────────────
-// Constant +/-1 per tick toward zero (NOT multiplicative)
+// ─── Friction / Clamping (pure entity transforms) ─────────────────────
 
-let applyFriction (ent: Entity) =
+let applyFriction (e: Entity) =
     let decel v =
         if v > zeroVel then max zeroVel (v - FrictionRate)
         elif v < zeroVel then min zeroVel (v + FrictionRate)
         else v
+    { e with VelX = decel e.VelX; VelY = decel e.VelY }
 
-    ent.VelX <- decel ent.VelX
-    ent.VelY <- decel ent.VelY
-
-// ─── Clamp Velocity ────────────────────────────────────────────────────
-
-let clampVel (ent: Entity) =
-    ent.VelX <- clamp -ent.MaxSpeed ent.MaxSpeed ent.VelX
-    ent.VelY <- clamp -ent.MaxSpeed ent.MaxSpeed ent.VelY
+let clampVel (e: Entity) =
+    { e with
+        VelX = clamp -e.MaxSpeed e.MaxSpeed e.VelX
+        VelY = clamp -e.MaxSpeed e.MaxSpeed e.VelY }
 
 // ─── Wall Bounce + Goal Check ──────────────────────────────────────────
-// Returns true if a goal was scored
 
-let checkWallsAndGoals (gs: GameState) idx =
-    let ent = gs.Entities[idx]
-    let isBall = (idx = gs.BallIdx)
+/// Returns the updated match and whether a goal was scored by this entity.
+let private checkWallsAndGoals idx (m: Match) =
+    let isBall = idx = m.BallIdx
+    let mutable e = m.Entities[idx]
+    let mutable team1Score = m.Team1Score
+    let mutable team2Score = m.Team2Score
+    let mutable goalScoredBy = m.GoalScoredBy
     let mutable scored = false
 
-    let inGoalY () = ent.Y >= GoalTop && ent.Y <= GoalBottom
+    let inGoalY (e: Entity) = e.Y >= GoalTop && e.Y <= GoalBottom
 
     // Left wall / left goal
-    if ent.VelX < zeroVel && ent.X <= FieldLeft then
-        if isBall && inGoalY () then
-            gs.Team2Score <- gs.Team2Score + 1
-            gs.GoalFlashTimer <- 90<tick>
-            gs.GoalScoredBy <- Team2Scored
+    if e.VelX < zeroVel && e.X <= FieldLeft then
+        if isBall && inGoalY e then
+            team2Score <- team2Score + 1
+            goalScoredBy <- Team2Scored
             scored <- true
         else
-            ent.X <- FieldLeft
-            ent.VelX <- abs ent.VelX
-    elif ent.X <= FieldLeft && not isBall then
-        ent.X <- FieldLeft
-
-        if ent.VelX < zeroVel then
-            ent.VelX <- abs ent.VelX
+            e <- { e with X = FieldLeft; VelX = abs e.VelX }
+    elif e.X <= FieldLeft && not isBall then
+        e <- { e with X = FieldLeft }
+        if e.VelX < zeroVel then e <- { e with VelX = abs e.VelX }
 
     // Right wall / right goal
-    if ent.VelX > zeroVel && ent.X >= FieldRight then
-        if isBall && inGoalY () then
-            gs.Team1Score <- gs.Team1Score + 1
-            gs.GoalFlashTimer <- 90<tick>
-            gs.GoalScoredBy <- Team1Scored
+    if e.VelX > zeroVel && e.X >= FieldRight then
+        if isBall && inGoalY e then
+            team1Score <- team1Score + 1
+            goalScoredBy <- Team1Scored
             scored <- true
         else
-            ent.X <- FieldRight
-            ent.VelX <- -(abs ent.VelX)
-    elif ent.X >= FieldRight && not isBall then
-        ent.X <- FieldRight
-
-        if ent.VelX > zeroVel then
-            ent.VelX <- -(abs ent.VelX)
+            e <- { e with X = FieldRight; VelX = -(abs e.VelX) }
+    elif e.X >= FieldRight && not isBall then
+        e <- { e with X = FieldRight }
+        if e.VelX > zeroVel then e <- { e with VelX = -(abs e.VelX) }
 
     // Top/bottom walls
-    if ent.VelY < zeroVel && ent.Y <= FieldTop then
-        ent.Y <- FieldTop
-        ent.VelY <- abs ent.VelY
-
-    if ent.VelY > zeroVel && ent.Y >= FieldBottom then
-        ent.Y <- FieldBottom
-        ent.VelY <- -(abs ent.VelY)
+    if e.VelY < zeroVel && e.Y <= FieldTop then
+        e <- { e with Y = FieldTop; VelY = abs e.VelY }
+    if e.VelY > zeroVel && e.Y >= FieldBottom then
+        e <- { e with Y = FieldBottom; VelY = -(abs e.VelY) }
 
     // Clamp safety
     if not isBall || not scored then
-        ent.X <- clamp FieldLeft FieldRight ent.X
+        e <- { e with X = clamp FieldLeft FieldRight e.X }
+    e <- { e with Y = clamp FieldTop FieldBottom e.Y }
 
-    ent.Y <- clamp FieldTop FieldBottom ent.Y
-
-    scored
+    let final = e
+    let m = withEnt idx (fun _ -> final) m
+    let m =
+        if scored then
+            { m with
+                Team1Score = team1Score
+                Team2Score = team2Score
+                GoalScoredBy = goalScoredBy
+                GoalFlashTimer = 90<tick> }
+        else m
+    m, scored
 
 // ─── Human Input ───────────────────────────────────────────────────────
 
-let applyHumanInput (gs: GameState) idx (input: Input) (fireHoldTicks: int<tick> byref) =
-    let ent = gs.Entities[idx]
+let private applyHumanInput idx isTeam1 (input: Input) (m: Match) =
+    let e = m.Entities[idx]
     let mutable dx = 0.0
     let mutable dy = 0.0
+    let mutable velX = e.VelX
+    let mutable velY = e.VelY
 
-    if input.Left then
-        ent.VelX <- ent.VelX - ent.Accel
-        dx <- -1.0
+    if input.Left then velX <- velX - e.Accel; dx <- -1.0
+    if input.Right then velX <- velX + e.Accel; dx <- 1.0
+    if input.Up then velY <- velY - e.Accel; dy <- -1.0
+    if input.Down then velY <- velY + e.Accel; dy <- 1.0
 
-    if input.Right then
-        ent.VelX <- ent.VelX + ent.Accel
-        dx <- 1.0
+    let e = clampVel { e with VelX = velX; VelY = velY }
+    let e = if dx <> 0.0 || dy <> 0.0 then { e with DirX = dx; DirY = dy } else e
+    let m = withEnt idx (fun _ -> e) m
 
-    if input.Up then
-        ent.VelY <- ent.VelY - ent.Accel
-        dy <- -1.0
-
-    if input.Down then
-        ent.VelY <- ent.VelY + ent.Accel
-        dy <- 1.0
-
-    clampVel ent
-
-    if dx <> 0.0 || dy <> 0.0 then
-        ent.DirX <- dx
-        ent.DirY <- dy
+    let holdTicks = if isTeam1 then m.FireHoldTicks1 else m.FireHoldTicks2
+    let setHold t (m: Match) =
+        if isTeam1 then { m with FireHoldTicks1 = t } else { m with FireHoldTicks2 = t }
 
     // Charge mechanic: hold fire key for harder shot, release to fire
-    match gs.BallState with
+    match m.BallState with
     | HeldBy owner when owner = idx ->
         if input.Fire then
-            fireHoldTicks <- fireHoldTicks + 1<tick>
-        elif fireHoldTicks > 0<tick> then
-            let t = float (int fireHoldTicks) / float (int ChargeTicksForFull)
+            setHold (holdTicks + 1<tick>) m
+        elif holdTicks > 0<tick> then
+            let t = float (int holdTicks) / float (int ChargeTicksForFull)
             let chargeFrac = PassPowerFraction + (1.0 - PassPowerFraction) * (min 1.0 t)
-            fireHoldTicks <- 0<tick>
-            releaseBall gs idx chargeFrac
-    | _ -> fireHoldTicks <- 0<tick>
+            m |> setHold 0<tick> |> releaseBall idx chargeFrac
+        else m
+    | _ -> setHold 0<tick> m
 
-// ─── AI: Move toward target ────────────────────────────────────────────
+// ─── AI: Move toward target (pure entity transform) ───────────────────
 
-let aiMoveToward (ent: Entity) (targetX: float<px>) (targetY: float<px>) =
-    if ent.X > targetX then
-        ent.VelX <- ent.VelX - ent.Accel
-    elif ent.X < targetX then
-        ent.VelX <- ent.VelX + ent.Accel
-
-    if ent.Y > targetY then
-        ent.VelY <- ent.VelY - ent.Accel
-    elif ent.Y < targetY then
-        ent.VelY <- ent.VelY + ent.Accel
-
-    clampVel ent
-    let dx = float (targetX - ent.X)
-    let dy = float (targetY - ent.Y)
-
+let aiMoveToward (targetX: float<px>) (targetY: float<px>) (e: Entity) =
+    let velX =
+        if e.X > targetX then e.VelX - e.Accel
+        elif e.X < targetX then e.VelX + e.Accel
+        else e.VelX
+    let velY =
+        if e.Y > targetY then e.VelY - e.Accel
+        elif e.Y < targetY then e.VelY + e.Accel
+        else e.VelY
+    let e = clampVel { e with VelX = velX; VelY = velY }
+    let dx = float (targetX - e.X)
+    let dy = float (targetY - e.Y)
     if abs dx > 2.0 || abs dy > 2.0 then
-        ent.DirX <- float (sign dx)
-        ent.DirY <- float (sign dy)
+        { e with DirX = float (sign dx); DirY = float (sign dy) }
+    else e
 
 // ─── AI: Active Player Logic ───────────────────────────────────────────
 
-let aiActivePlayer (gs: GameState) idx isTeam1 =
-    let ent = gs.Entities[idx]
-    let ball = gs.Entities[gs.BallIdx]
+/// Nearest opposing skater to entity `idx` (goalie excluded in 5-player
+/// mode). Returns (opponent index, distance in px).
+let private nearestOpponent (m: Match) idx isTeam1 =
+    let ent = m.Entities[idx]
+    let skipGoalie = if m.FivePlayerMode then 1 else 0
+    let oppStart = if isTeam1 then m.Team2Start else 0
+    let mutable bestDistSq = System.Double.MaxValue
+    let mutable bestIdx = oppStart + skipGoalie
+    for i in oppStart + skipGoalie .. oppStart + m.PlayersPerTeam - 1 do
+        let o = m.Entities[i]
+        let dx = float (o.X - ent.X)
+        let dy = float (o.Y - ent.Y)
+        let d = dx * dx + dy * dy
+        if d < bestDistSq then
+            bestDistSq <- d
+            bestIdx <- i
+    bestIdx, sqrt bestDistSq
+
+/// Pick a teammate worth passing to: within pass range, unmarked, and not
+/// far behind the carrier; prefer the most forward-positioned candidate.
+let private tryFindPassMate (m: Match) idx isTeam1 =
+    let ent = m.Entities[idx]
+    let goalDir = if isTeam1 then 1.0 else -1.0
+    let skipGoalie = if m.FivePlayerMode then 1 else 0
+    let startEnt = if isTeam1 then 0 else m.Team2Start
+    let mutable best = -1
+    let mutable bestForward = -20.0 // allow a slight drop pass, nothing deeper
+    for i in skipGoalie .. m.PlayersPerTeam - 1 do
+        let ei = startEnt + i
+        if ei <> idx then
+            let mate = m.Entities[ei]
+            let dx = float (mate.X - ent.X)
+            let dy = float (mate.Y - ent.Y)
+            let dist = sqrt (dx * dx + dy * dy)
+            if dist >= float AiPassMinDist && dist <= float AiPassMaxDist then
+                let _, oppDist = nearestOpponent m ei isTeam1
+                if oppDist > float AiMateOpenDist then
+                    let forward = dx * goalDir
+                    if forward > bestForward then
+                        bestForward <- forward
+                        best <- ei
+    if best >= 0 then Some best else None
+
+/// Aim at a teammate (8-way, since the puck leaves along DirX/DirY) and pass.
+let private aiPassTo idx mateIdx (m: Match) =
+    let ent = m.Entities[idx]
+    let mate = m.Entities[mateIdx]
+    let dx = float (mate.X - ent.X)
+    let dy = float (mate.Y - ent.Y)
+    let adx = abs dx
+    let ady = abs dy
+    // Closest of the 8 directions: pure axis when within ~22.5° of it
+    let dirX, dirY =
+        if adx > 2.414 * ady then float (sign dx), 0.0
+        elif ady > 2.414 * adx then 0.0, float (sign dy)
+        else float (sign dx), float (sign dy)
+    m
+    |> withEnt idx (fun e -> { e with DirX = dirX; DirY = dirY })
+    |> releaseBall idx AiPassPowerFraction
+
+let private aiActivePlayer idx isTeam1 (m: Match) =
+    let ent = m.Entities[idx]
+    let ball = m.Entities[m.BallIdx]
     let goalDir = if isTeam1 then 1.0 else -1.0
 
-    match gs.BallState with
-    | Free -> aiMoveToward ent ball.X ball.Y
+    match m.BallState with
+    | Free -> withEnt idx (aiMoveToward ball.X ball.Y) m
 
     | HeldBy owner when owner = idx ->
+        let oppIdx, oppDist = nearestOpponent m idx isTeam1
+        let opp = m.Entities[oppIdx]
+        // Blocking = close AND on the goal side of the carrier
+        let goalSide = float (opp.X - ent.X) * goalDir > -6.0
+        let blocked = oppDist < float AiBlockDist && goalSide
+        let pressured = oppDist < float AiPressureDist
+
         let inShootZone =
-            if isTeam1 then
-                ent.X > FieldRight - AiShootZoneX
-            else
-                ent.X < AiShootZoneX
+            if isTeam1 then ent.X > FieldRight - AiShootZoneX
+            else ent.X < FieldLeft + AiShootZoneX
 
-        if inShootZone && ent.Y >= GoalTop && ent.Y <= GoalBottom then
-            ent.DirX <- goalDir
-            ent.DirY <- 0.0
-            releaseBall gs idx 1.0
-        elif gs.PossessionTimer |> AiShootCheckpoints.Contains then
-            let rndY = float (gs.Rng.Next(int AiRandomShot * 2 + 1)) - AiRandomShot
-            ent.DirX <- goalDir
+        let alignedWithGoal = ent.Y >= GoalTop && ent.Y <= GoalBottom
 
-            ent.DirY <-
+        // Fresh possession: for the first couple of seconds the carrier
+        // rushes toward the opponent goal instead of passing or backing off
+        let rushing = m.PossessionTimer > PossessionTimer - AiInitialRushTicks
+
+        if inShootZone && alignedWithGoal && not blocked then
+            // Clear look at the goal: shoot — but not with perfect aim; a
+            // fair share of shots go off diagonally and miss from range
+            let rand, r = Rand.nextInt 100 m.Rand
+            let dirY =
+                if r < 20 then 1.0
+                elif r < 40 then -1.0
+                else 0.0
+            { m with Rand = rand }
+            |> withEnt idx (fun e -> { e with DirX = goalDir; DirY = dirY })
+            |> releaseBall idx 1.0
+        elif rushing then
+            let targetX =
+                if isTeam1 then FieldRight - AiCarryTargetMargin
+                else FieldLeft + AiCarryTargetMargin
+            let lane =
+                if blocked || pressured then
+                    // swerve around the defender while still advancing
+                    if opp.Y > ent.Y then ent.Y - 28.0<px> else ent.Y + 28.0<px>
+                else
+                    ent.Y + m.WanderY[idx] * 1.5
+            let targetY =
+                if inShootZone then clamp (GoalTop + 8.0<px>) (GoalBottom - 8.0<px>) lane
+                else clamp (FieldTop + 12.0<px>) (FieldBottom - 12.0<px>) lane
+            withEnt idx (aiMoveToward targetX targetY) m
+        elif pressured then
+            // Opponent right on us: pass if someone is open, otherwise
+            // skate a bit backwards and sideways to find a better spot
+            match tryFindPassMate m idx isTeam1 with
+            | Some mateIdx -> aiPassTo idx mateIdx m
+            | None ->
+                let backX = ent.X - goalDir * 20.0<px>
+                let sideY = if opp.Y > ent.Y then ent.Y - 24.0<px> else ent.Y + 24.0<px>
+                withEnt idx
+                    (aiMoveToward (clamp FieldLeft FieldRight backX) (clamp FieldTop FieldBottom sideY)) m
+        elif m.PossessionTimer <= AiForcedShotTimer then
+            // Held long enough — get a shot away before the possession
+            // timer force-releases the puck in a random direction
+            let rand, r = Rand.nextInt (int AiRandomShot * 2 + 1) m.Rand
+            let rndY = float r - AiRandomShot
+            let dirY =
                 if rndY > 3.0 then 1.0
                 elif rndY < -3.0 then -1.0
                 else 0.0
-
-            releaseBall gs idx 1.0
+            { m with Rand = rand }
+            |> withEnt idx (fun e -> { e with DirX = goalDir; DirY = dirY })
+            |> releaseBall idx 1.0
+        elif blocked then
+            // Blocker ahead but not on us yet: pass if a mate is open,
+            // otherwise dodge laterally around the blocker, keeping the puck
+            match tryFindPassMate m idx isTeam1 with
+            | Some mateIdx -> aiPassTo idx mateIdx m
+            | None ->
+                let sideY = if opp.Y > ent.Y then ent.Y - 28.0<px> else ent.Y + 28.0<px>
+                withEnt idx
+                    (aiMoveToward
+                        (clamp FieldLeft FieldRight (ent.X + goalDir * 8.0<px>))
+                        (clamp FieldTop FieldBottom sideY)) m
         else
-            let targetX = if isTeam1 then FieldRight else FieldLeft
-            let targetY = clamp (GoalTop + 10.0<px>) (GoalBottom - 10.0<px>) ent.Y
-            aiMoveToward ent targetX targetY
+            // Open ice: carry toward the opponent end, weaving a random
+            // route via the wander offset; funnel toward the goal mouth
+            // once inside the shooting zone
+            let targetX =
+                if isTeam1 then FieldRight - AiCarryTargetMargin
+                else FieldLeft + AiCarryTargetMargin
+            let lane = ent.Y + m.WanderY[idx] * 1.5
+            let targetY =
+                if inShootZone then clamp (GoalTop + 8.0<px>) (GoalBottom - 8.0<px>) lane
+                else clamp (FieldTop + 12.0<px>) (FieldBottom - 12.0<px>) lane
+            withEnt idx (aiMoveToward targetX targetY) m
 
     | HeldBy _ ->
-        if opponentOwnsBall gs isTeam1 then
-            aiMoveToward ent ball.X ball.Y
+        if opponentOwnsBall m isTeam1 then
+            withEnt idx (aiMoveToward ball.X ball.Y) m
         else
-            let supportX = if isTeam1 then ball.X - 30.0<px> else ball.X + 30.0<px>
-            aiMoveToward ent (clamp FieldLeft FieldRight supportX) ball.Y
+            let supportX =
+                (if isTeam1 then ball.X - 30.0<px> else ball.X + 30.0<px>) + m.WanderX[idx]
+            let supportY = clamp FieldTop FieldBottom (ball.Y + m.WanderY[idx])
+            withEnt idx (aiMoveToward (clamp FieldLeft FieldRight supportX) supportY) m
 
 // ─── AI: Defender Logic ────────────────────────────────────────────────
 
-let aiDefender (gs: GameState) idx isTeam1 =
-    let ent = gs.Entities[idx]
-    let localIdx = if isTeam1 then idx else idx - gs.Team2Start
-    let hasBall = teamOwnsBall gs isTeam1
+let private aiDefender idx isTeam1 (m: Match) =
+    let localIdx = if isTeam1 then idx else idx - m.Team2Start
+    let hasBall = teamOwnsBall m isTeam1
 
-    let homeX, homeY =
-        if gs.FivePlayerMode then
-            let hx =
-                if hasBall then
-                    (if isTeam1 then team1HomeX5Attack else team2HomeX5Attack)[localIdx]
-                else
-                    (if isTeam1 then team1HomeX5 else team2HomeX5)[localIdx]
+    if not m.FivePlayerMode && opponentOwnsBall m isTeam1 then
+        // 3v3 has no goalie: non-active players collapse in front of their
+        // own goal (staggered depths) to block the shooting lane.
+        // Stand off the crease like defensemen — challenge the shooter,
+        // don't stand in the net.
+        let ball = m.Entities[m.BallIdx]
+        let guardX =
+            if isTeam1 then FieldLeft + 24.0<px> + float localIdx * 12.0<px>
+            else FieldRight - 24.0<px> - float localIdx * 12.0<px>
+        // Track the ball's Y exactly — this is net-minding duty
+        let guardY = clamp (GoalTop + 4.0<px>) (GoalBottom - 4.0<px>) ball.Y
+        withEnt idx (aiMoveToward guardX guardY) m
+    else
+        let homeX, homeY =
+            if m.FivePlayerMode then
+                let hx =
+                    if hasBall then (if isTeam1 then team1HomeX5Attack else team2HomeX5Attack)[localIdx]
+                    else (if isTeam1 then team1HomeX5 else team2HomeX5)[localIdx]
+                hx, (if isTeam1 then team1HomeY5 else team2HomeY5)[localIdx]
+            else
+                let hx =
+                    if hasBall then (if isTeam1 then team1HomeXAttack else team2HomeXAttack)[localIdx]
+                    else (if isTeam1 then team1HomeX else team2HomeX)[localIdx]
+                hx, (if isTeam1 then team1HomeY else team2HomeY)[localIdx]
 
-            let hy = (if isTeam1 then team1HomeY5 else team2HomeY5)[localIdx]
-            hx, hy
-        else
-            let hx =
-                if hasBall then
-                    (if isTeam1 then team1HomeXAttack else team2HomeXAttack)[localIdx]
-                else
-                    (if isTeam1 then team1HomeX else team2HomeX)[localIdx]
-
-            let hy = (if isTeam1 then team1HomeY else team2HomeY)[localIdx]
-            hx, hy
-
-    aiMoveToward ent homeX homeY
+        // Wander offset so players don't park on exactly the same spot every time
+        let targetX = clamp FieldLeft FieldRight (homeX + m.WanderX[idx])
+        let targetY = clamp FieldTop FieldBottom (homeY + m.WanderY[idx])
+        withEnt idx (aiMoveToward targetX targetY) m
 
 // ─── AI: Goalie Logic (5-player mode, index 0 per team) ──────────────
-// Goalie patrols a square zone in front of the goal (not just a line).
-// When holding the puck, immediately passes forward to nearest teammate.
 
-let private goalieAutoPass (gs: GameState) goalieIdx isTeam1 =
-    let goalie = gs.Entities[goalieIdx]
-    let ppt = gs.PlayersPerTeam
-    let startEnt = if isTeam1 then 0 else gs.Team2Start
+let private goalieAutoPass goalieIdx isTeam1 (m: Match) =
+    let goalie = m.Entities[goalieIdx]
+    let startEnt = if isTeam1 then 0 else m.Team2Start
 
     // Find nearest non-goalie teammate to pass to
-    let mutable bestDist = Double.MaxValue
+    let mutable bestDist = System.Double.MaxValue
     let mutable bestIdx = -1
-    for i in 1 .. ppt - 1 do       // skip index 0 (goalie itself)
+    for i in 1 .. m.PlayersPerTeam - 1 do
         let ei = startEnt + i
-        let mate = gs.Entities[ei]
+        let mate = m.Entities[ei]
         let dx = float (mate.X - goalie.X)
         let dy = float (mate.Y - goalie.Y)
         let d = dx * dx + dy * dy
@@ -578,474 +710,478 @@ let private goalieAutoPass (gs: GameState) goalieIdx isTeam1 =
             bestIdx <- ei
 
     if bestIdx >= 0 then
-        let mate = gs.Entities[bestIdx]
+        let mate = m.Entities[bestIdx]
         let dx = float (mate.X - goalie.X)
         let dy = float (mate.Y - goalie.Y)
         let len = sqrt (dx * dx + dy * dy)
-        if len > 1.0 then
-            goalie.DirX <- float (sign dx)
-            goalie.DirY <- float (sign dy)
-        else
-            goalie.DirX <- if isTeam1 then 1.0 else -1.0
-            goalie.DirY <- 0.0
-        releaseBall gs goalieIdx PassPowerFraction
+        let dirX, dirY =
+            if len > 1.0 then float (sign dx), float (sign dy)
+            else (if isTeam1 then 1.0 else -1.0), 0.0
+        m
+        |> withEnt goalieIdx (fun e -> { e with DirX = dirX; DirY = dirY })
+        |> releaseBall goalieIdx PassPowerFraction
+    else m
 
-let aiGoalie (gs: GameState) idx isTeam1 =
-    let ent = gs.Entities[idx]
-    let ball = gs.Entities[gs.BallIdx]
-
+let private aiGoalie idx isTeam1 (m: Match) =
     // Auto-pass when holding puck (pass immediately, no delay)
-    match gs.BallState with
-    | HeldBy owner when owner = idx ->
-        goalieAutoPass gs idx isTeam1
-    | _ -> ()
+    let m =
+        match m.BallState with
+        | HeldBy owner when owner = idx -> goalieAutoPass idx isTeam1 m
+        | _ -> m
 
-    // Movement: square zone in front of goal (like real crease)
-    // Goalie tracks puck Y, but allowed forward shift depends on game situation:
-    //   - Opponent has puck: stay very close to goal line (minimal forward shift)
-    //   - Ball free: moderate forward shift
-    //   - Team has puck: can come out a bit more
+    // Movement: square zone in front of goal; allowed forward shift depends
+    // on the game situation
+    let ball = m.Entities[m.BallIdx]
     let baseX = if isTeam1 then GoaliePatrolXLeft else GoaliePatrolXRight
     let forwardShift =
-        if opponentOwnsBall gs isTeam1 then 6.0<px>     // stay deep
-        elif teamOwnsBall gs isTeam1 then 14.0<px>       // come out a bit
-        else 10.0<px>                                     // moderate
+        if opponentOwnsBall m isTeam1 then 6.0<px>      // stay deep
+        elif teamOwnsBall m isTeam1 then 14.0<px>       // come out a bit
+        else 10.0<px>                                    // moderate
     let goalieMinX, goalieMaxX =
         if isTeam1 then baseX, baseX + forwardShift
         else baseX - forwardShift, baseX
 
-    // Move toward puck but clamped within the crease square
     let targetX = clamp goalieMinX goalieMaxX ball.X
     let targetY = clamp (GoalTop + 4.0<px>) (GoalBottom - 4.0<px>) ball.Y
-    aiMoveToward ent targetX targetY
+    withEnt idx (aiMoveToward targetX targetY) m
 
 // ─── AI: Wing Logic (5-player mode, indices 3-4 per team) ────────────
 
-let aiWing (gs: GameState) idx isTeam1 =
-    let ent = gs.Entities[idx]
-    let ball = gs.Entities[gs.BallIdx]
-    let localIdx = if isTeam1 then idx else idx - gs.Team2Start
+let private aiWing idx isTeam1 (m: Match) =
+    let ball = m.Entities[m.BallIdx]
+    let localIdx = if isTeam1 then idx else idx - m.Team2Start
+    let wx = m.WanderX[idx]
+    let wy = m.WanderY[idx]
 
-    if teamOwnsBall gs isTeam1 then
+    if teamOwnsBall m isTeam1 then
         let targetX =
-            if isTeam1 then
-                clamp (FieldLeft + 40.0<px>) (FieldRight - 20.0<px>) (ball.X + 40.0<px>)
-            else
-                clamp (FieldLeft + 20.0<px>) (FieldRight - 40.0<px>) (ball.X - 40.0<px>)
-
+            if isTeam1 then clamp (FieldLeft + 40.0<px>) (FieldRight - 20.0<px>) (ball.X + 40.0<px> + wx)
+            else clamp (FieldLeft + 20.0<px>) (FieldRight - 40.0<px>) (ball.X - 40.0<px> + wx)
         let baseY = (if isTeam1 then team1HomeY5 else team2HomeY5)[localIdx]
-        let targetY = clamp FieldTop FieldBottom baseY
-        aiMoveToward ent targetX targetY
-    elif opponentOwnsBall gs isTeam1 then
+        let targetY = clamp FieldTop FieldBottom (baseY + wy)
+        withEnt idx (aiMoveToward targetX targetY) m
+    elif opponentOwnsBall m isTeam1 then
         let retreatX =
-            if isTeam1 then
-                clamp FieldLeft (CenterX - 20.0<px>) (ball.X - 50.0<px>)
-            else
-                clamp (CenterX + 20.0<px>) FieldRight (ball.X + 50.0<px>)
-
-        let targetY = clamp (GoalTop - 10.0<px>) (GoalBottom + 10.0<px>) ball.Y
-        aiMoveToward ent retreatX targetY
+            if isTeam1 then clamp FieldLeft (CenterX - 20.0<px>) (ball.X - 50.0<px> + wx)
+            else clamp (CenterX + 20.0<px>) FieldRight (ball.X + 50.0<px> + wx)
+        let targetY = clamp (GoalTop - 10.0<px>) (GoalBottom + 10.0<px>) (ball.Y + wy)
+        withEnt idx (aiMoveToward retreatX targetY) m
     else
         let homeX = (if isTeam1 then team1HomeX5 else team2HomeX5)[localIdx]
         let homeY = (if isTeam1 then team1HomeY5 else team2HomeY5)[localIdx]
-        aiMoveToward ent ((homeX + ball.X) / 2.0) ((homeY + ball.Y) / 2.0)
+        let targetX = clamp FieldLeft FieldRight ((homeX + ball.X) / 2.0 + wx)
+        let targetY = clamp FieldTop FieldBottom ((homeY + ball.Y) / 2.0 + wy)
+        withEnt idx (aiMoveToward targetX targetY) m
 
 // ─── Move Ball When Possessed ──────────────────────────────────────────
 
-let moveBallPossessed (gs: GameState) =
-    match gs.BallState with
+let private moveBallPossessed (m: Match) =
+    match m.BallState with
     | HeldBy owner ->
-        let ent = gs.Entities[owner]
-        let ball = gs.Entities[gs.BallIdx]
-        ball.X <- ent.X + ent.DirX * 8.0<px>
-        ball.Y <- ent.Y + ent.DirY * 8.0<px>
-        ball.VelX <- zeroVel
-        ball.VelY <- zeroVel
-    | Free -> ()
+        let ent = m.Entities[owner]
+        withEnt m.BallIdx
+            (fun b ->
+                { b with
+                    X = ent.X + ent.DirX * 8.0<px>
+                    Y = ent.Y + ent.DirY * 8.0<px>
+                    VelX = zeroVel; VelY = zeroVel }) m
+    | Free -> m
 
 // ─── Ball Pickup Collision ─────────────────────────────────────────────
 
-let checkBallPickup (gs: GameState) =
-    match gs.BallState with
-    | HeldBy _ -> ()
+let private checkBallPickup (m: Match) =
+    match m.BallState with
+    | HeldBy _ -> m
     | Free ->
-        let ball = gs.Entities[gs.BallIdx]
+        let ball = m.Entities[m.BallIdx]
+        // Alternate which team's players are checked first, so that when two
+        // opponents reach the ball on the same tick the tie doesn't always
+        // break toward team 1.
+        let offset = if int m.GameTick % 2 = 0 then 0 else m.Team2Start
 
-        let rec tryPickup i =
-            if i < gs.NumPlayers then
-                let ent = gs.Entities[i]
-                // The player who just released the ball cannot re-capture it
-                // during the cooldown; teammates and opponents still can.
-                let blocked = i = gs.LastReleaser && gs.RecaptureBlockTicks > 0<tick>
-
+        let rec tryPickup n =
+            if n < m.NumPlayers then
+                let i = (n + offset) % m.NumPlayers
+                let ent = m.Entities[i]
+                let blocked = i = m.LastReleaser && m.RecaptureBlockTicks > 0<tick>
                 if not blocked
                    && abs (ent.X - ball.X) < CollisionDist
                    && abs (ent.Y - ball.Y) < CollisionDist then
-                    gs.BallState <- HeldBy i
-                    gs.PossessionTimer <- PossessionTimer
-                    ball.VelX <- zeroVel
-                    ball.VelY <- zeroVel
-                else
-                    tryPickup (i + 1)
+                    { m with
+                        BallState = HeldBy i
+                        PossessionTimer = PossessionTimer }
+                    |> withEnt m.BallIdx (fun b -> { b with VelX = zeroVel; VelY = zeroVel })
+                else tryPickup (n + 1)
+            else m
 
         tryPickup 0
 
 // ─── Stalemate Detection ──────────────────────────────────────────────
 
-let checkStalemate (gs: GameState) =
-    match gs.PrevBallState, gs.BallState with
-    | Free, HeldBy _ -> gs.StalemateCounter <- 0<tick>
-    | _, Free -> gs.StalemateCounter <- gs.StalemateCounter + 1<tick>
-    | HeldBy a, HeldBy b when a <> b -> gs.StalemateCounter <- 0<tick>
-    | _ -> gs.StalemateCounter <- gs.StalemateCounter + 1<tick>
-
-    gs.PrevBallState <- gs.BallState
-    gs.StalemateCounter >= StalemateFaceoff
+let private checkStalemate (m: Match) =
+    let counter =
+        match m.PrevBallState, m.BallState with
+        | Free, HeldBy _ -> 0<tick>
+        | _, Free -> m.StalemateCounter + 1<tick>
+        | HeldBy a, HeldBy b when a <> b -> 0<tick>
+        | _ -> m.StalemateCounter + 1<tick>
+    let m = { m with StalemateCounter = counter; PrevBallState = m.BallState }
+    m, counter >= StalemateFaceoff
 
 // ─── Game Clock ────────────────────────────────────────────────────────
 
-let updateClock (gs: GameState) =
-    gs.ClockTick <- gs.ClockTick + 1<tick>
-
-    if gs.ClockTick >= ClockTicksPerSec * 1<sec> then
-        gs.ClockTick <- 0<tick>
-        gs.ClockSeconds <- gs.ClockSeconds + 1<sec>
+let private updateClock (m: Match) =
+    let clockTick = m.ClockTick + 1<tick>
+    if clockTick >= ClockTicksPerSec * 1<sec> then
+        { m with ClockTick = 0<tick>; ClockSeconds = m.ClockSeconds + 1<sec> }
+    else
+        { m with ClockTick = clockTick }
 
 // ─── Process One Team ──────────────────────────────────────────────────
 
-let private processTeam
-    (gs: GameState)
-    isTeam1
-    isHuman
-    activeIdx
-    (input: Input)
-    (holdTicks: int<tick> byref)
-    =
-    let ppt = gs.PlayersPerTeam
-    let t2s = gs.Team2Start
-    let startEnt = if isTeam1 then 0 else t2s
-
-    for i in 0 .. ppt - 1 do
+let private processTeam isTeam1 isHuman activeIdx (input: Input) (m: Match) =
+    let startEnt = if isTeam1 then 0 else m.Team2Start
+    let mutable acc = m
+    for i in 0 .. m.PlayersPerTeam - 1 do
         let ei = startEnt + i
-        let role = playerRole gs.FivePlayerMode i
+        acc <-
+            match playerRole acc.FivePlayerMode i with
+            | Goalie -> aiGoalie ei isTeam1 acc
+            | _ when ei = activeIdx ->
+                if isHuman then applyHumanInput ei isTeam1 input acc
+                else aiActivePlayer ei isTeam1 acc
+            | Wing -> aiWing ei isTeam1 acc
+            | _ -> aiDefender ei isTeam1 acc
+    acc
 
-        match role with
-        | Goalie -> aiGoalie gs ei isTeam1
-        | _ when ei = activeIdx ->
-            if isHuman then
-                applyHumanInput gs ei input &holdTicks
-            else
-                aiActivePlayer gs ei isTeam1
-        | Wing -> aiWing gs ei isTeam1
-        | _ -> aiDefender gs ei isTeam1
+// ─── Main Game Tick (pure: Match in, Match out) ───────────────────────
 
-// ─── Main Game Tick ────────────────────────────────────────────────────
+let gameTick (input1: Input) (input2: Input) (m: Match) : Match =
+    if not m.Playing then m else
 
-let gameTick (gs: GameState) =
-    if not gs.Playing then
-        ()
+    let m = { m with GameTick = m.GameTick + 1<tick> }
+
+    // Decrement stick animation timers
+    let m =
+        if Array.exists (fun t -> t > 0) m.StickAnimTimers then
+            { m with StickAnimTimers = Array.map (fun t -> max 0 (t - 1)) m.StickAnimTimers }
+        else m
+
+    // Goal flash countdown (the rest of the tick pauses while it shows)
+    if m.GoalFlashTimer > 0<tick> then
+        let m = { m with GoalFlashTimer = m.GoalFlashTimer - 1<tick> }
+        if m.GoalFlashTimer = 0<tick> then resetPositions m else m
     else
 
-        gs.GameTick <- gs.GameTick + 1<tick>
+    // Re-capture cooldown countdown
+    let m =
+        if m.RecaptureBlockTicks > 0<tick> then
+            { m with RecaptureBlockTicks = m.RecaptureBlockTicks - 1<tick> }
+        else m
 
-        // Decrement stick animation timers
-        for i in 0 .. gs.NumEntities - 1 do
-            let t = gs.StickAnimTimers[i]
+    // Re-roll each player's AI wander offset periodically
+    let m =
+        let timer = m.WanderTimer - 1<tick>
+        if timer <= 0<tick> then
+            let wx = Array.copy m.WanderX
+            let wy = Array.copy m.WanderY
+            let mutable rand = m.Rand
+            for i in 0 .. m.NumPlayers - 1 do
+                let r1, fx = Rand.nextFloat rand
+                let r2, fy = Rand.nextFloat r1
+                rand <- r2
+                wx[i] <- (fx * 2.0 - 1.0) * AiWanderRange
+                wy[i] <- (fy * 2.0 - 1.0) * AiWanderRange
+            { m with WanderTimer = AiWanderIntervalTicks; WanderX = wx; WanderY = wy; Rand = rand }
+        else { m with WanderTimer = timer }
 
-            if t > 0 then
-                gs.StickAnimTimers[i] <- t - 1
+    // Active player: the holder while a skater has the ball, otherwise
+    // nearest to ball (skip goalie in 5-player mode). Human-controlled
+    // teams get hysteresis: the marker only jumps to a teammate clearly
+    // closer to the ball, so the player being steered isn't handed over
+    // to the AI on every micro-difference.
+    let skipGoalie = if m.FivePlayerMode then 1 else 0
+    let activeFor startIdx currentActive isHuman =
+        match m.BallState with
+        | HeldBy owner when owner >= startIdx + skipGoalie && owner < startIdx + m.PlayersPerTeam -> owner
+        | _ ->
+            let nearest = findNearestToBall m (startIdx + skipGoalie) (startIdx + m.PlayersPerTeam - 1)
+            if not isHuman
+               || currentActive < startIdx + skipGoalie
+               || currentActive >= startIdx + m.PlayersPerTeam then
+                nearest
+            else
+                let ball = m.Entities[m.BallIdx]
+                let distToBall i =
+                    let e = m.Entities[i]
+                    let dx = float (e.X - ball.X)
+                    let dy = float (e.Y - ball.Y)
+                    sqrt (dx * dx + dy * dy)
+                if distToBall nearest < distToBall currentActive - float AiActiveSwitchMargin then nearest
+                else currentActive
+    let m =
+        { m with
+            ActivePlayer1 = activeFor 0 m.ActivePlayer1 m.Team1Human
+            ActivePlayer2 = activeFor m.Team2Start m.ActivePlayer2 m.Team2Human }
 
-        // Goal flash countdown
-        if gs.GoalFlashTimer > 0<tick> then
-            gs.GoalFlashTimer <- gs.GoalFlashTimer - 1<tick>
+    // Process both teams
+    let m = processTeam true m.Team1Human m.ActivePlayer1 input1 m
+    let m = processTeam false m.Team2Human m.ActivePlayer2 input2 m
 
-            if gs.GoalFlashTimer = 0<tick> then
-                resetPositions gs
+    // Possession timer — auto-shoot when it expires (carrier recoils)
+    let m =
+        match m.BallState with
+        | HeldBy owner ->
+            let m = { m with PossessionTimer = m.PossessionTimer - 1<tick> }
+            if m.PossessionTimer <= 0<tick> then
+                let vx = m.Entities[owner].VelX
+                let vy = m.Entities[owner].VelY
+                m
+                |> releaseBall owner 1.0
+                |> withEnt owner (fun e -> { e with VelX = -vx; VelY = -vy })
+            else m
+        | Free -> m
+
+    // Ball friction cadence: only every 8th tick while free
+    let m, applyBallFric =
+        match m.BallState with
+        | HeldBy _ -> moveBallPossessed m, false
+        | Free ->
+            let counter = m.BallFrictionCounter - 1
+            if counter <= 0 then { m with BallFrictionCounter = BallAnimFrames }, true
+            else { m with BallFrictionCounter = counter }, false
+
+    // Friction: every tick for players, every 8th tick for the free ball
+    let m =
+        { m with
+            Entities =
+                m.Entities
+                |> Array.mapi (fun i e ->
+                    if i = m.BallIdx then (if applyBallFric then applyFriction e else e)
+                    else applyFriction e) }
+
+    // Teammate separation: push same-team players apart when too close (6v6 only)
+    let m =
+        if m.FivePlayerMode then
+            let sepDist = float TeammateSeparationDist
+            let sepDistSq = sepDist * sepDist
+            let ents = Array.copy m.Entities
+            let pushApart startIdx count =
+                for i in startIdx .. startIdx + count - 2 do
+                    for j in i + 1 .. startIdx + count - 1 do
+                        let ei = ents[i]
+                        let ej = ents[j]
+                        let dx = float (ei.X - ej.X)
+                        let dy = float (ei.Y - ej.Y)
+                        let distSq = dx * dx + dy * dy
+                        if distSq < sepDistSq && distSq > 0.01 then
+                            let dist = sqrt distSq
+                            let nx = dx / dist
+                            let ny = dy / dist
+                            ents[i] <- { ei with VelX = ei.VelX + nx * TeammateSeparationForce; VelY = ei.VelY + ny * TeammateSeparationForce }
+                            ents[j] <- { ej with VelX = ej.VelX - nx * TeammateSeparationForce; VelY = ej.VelY - ny * TeammateSeparationForce }
+            pushApart 0 m.PlayersPerTeam
+            pushApart m.Team2Start m.PlayersPerTeam
+            { m with Entities = ents }
+        else m
+
+    // When a player is (near-)stationary, face toward the puck
+    let m =
+        let ball = m.Entities[m.BallIdx]
+        { m with
+            Entities =
+                m.Entities
+                |> Array.mapi (fun i e ->
+                    if i = m.BallIdx then e
+                    else
+                        let speedSq = float e.VelX * float e.VelX + float e.VelY * float e.VelY
+                        if speedSq < 4.0 then
+                            let dx = float (ball.X - e.X)
+                            let dy = float (ball.Y - e.Y)
+                            if abs dx > 2.0 || abs dy > 2.0 then
+                                { e with DirX = float (sign dx); DirY = float (sign dy) }
+                            else e
+                        else e) }
+
+    // Ice trail: detect tight turns and leave skate marks, then decay marks
+    let m =
+        let marks = Array.copy m.TrailMarks
+        let prevDirX = Array.copy m.PrevDirX
+        let prevDirY = Array.copy m.PrevDirY
+        let mutable head = m.TrailMarkHead
+        let mutable count = m.TrailMarkCount
+        for i in 0 .. m.NumPlayers - 1 do
+            let e = m.Entities[i]
+            let speedSq = float e.VelX * float e.VelX + float e.VelY * float e.VelY
+            let dot = e.DirX * prevDirX[i] + e.DirY * prevDirY[i]
+            if speedSq > 100.0 && dot < 0.1 && (prevDirX[i] <> 0.0 || prevDirY[i] <> 0.0) then
+                marks[head] <- { MarkX = e.X; MarkY = e.Y; Life = TrailMarkLifetime }
+                head <- (head + 1) % MaxTrailMarks
+                if count < MaxTrailMarks then count <- count + 1
+            prevDirX[i] <- e.DirX
+            prevDirY[i] <- e.DirY
+        for i in 0 .. count - 1 do
+            if marks[i].Life > 0<tick> then
+                marks[i] <- { marks[i] with Life = marks[i].Life - 1<tick> }
+        { m with TrailMarks = marks; TrailMarkHead = head; TrailMarkCount = count; PrevDirX = prevDirX; PrevDirY = prevDirY }
+
+    // Move entities and check walls/goals
+    let m =
+        { m with
+            Entities =
+                m.Entities
+                |> Array.map (fun e ->
+                    { e with
+                        X = e.X + e.VelX * 1.0<tick> / SubPixelUnit
+                        Y = e.Y + e.VelY * 1.0<tick> / SubPixelUnit }) }
+
+    let m, goalScored =
+        let mutable acc = m
+        let mutable scoredAny = false
+        for i in 0 .. m.NumEntities - 1 do
+            let next, scored = checkWallsAndGoals i acc
+            acc <- next
+            if scored then scoredAny <- true
+        acc, scoredAny
+
+    let m =
+        if not goalScored then
+            let m = checkBallPickup m
+            let m, stalemate = checkStalemate m
+            if stalemate then resetPositions m else m
+        else m
+
+    // Clock
+    let m = updateClock m
+
+    // Period end check (deferred while a goal flash is showing)
+    if m.ClockSeconds >= m.PeriodLength && m.GoalFlashTimer <= 0<tick> then
+        let period = m.CurrentPeriod + 1
+        if period >= m.NumPeriods then
+            { m with CurrentPeriod = period; Playing = false }
         else
+            { m with CurrentPeriod = period; ClockSeconds = 0<sec>; ClockTick = 0<tick> }
+            |> resetPositions
+    else m
 
-            let ppt = gs.PlayersPerTeam
-            let t2s = gs.Team2Start
+// ─── League Mode (immutable) ───────────────────────────────────────────
 
-            // Re-capture cooldown countdown. Decremented before the teams are
-            // processed, so a release during this tick keeps the full window:
-            // the releaser is blocked on the release tick plus the 17 ticks
-            // after it, and may re-capture 18 ticks (0.3 s) after the release.
-            if gs.RecaptureBlockTicks > 0<tick> then
-                gs.RecaptureBlockTicks <- gs.RecaptureBlockTicks - 1<tick>
+type TeamStanding =
+    { Wins: int
+      Losses: int
+      Draws: int
+      Points: int
+      GoalsFor: int
+      GoalsAgainst: int }
 
-            // Active player: the holder while a skater has the ball,
-            // otherwise nearest to ball (skip goalie in 5-player mode)
-            let skipGoalie = if gs.FivePlayerMode then 1 else 0
+module TeamStanding =
+    let empty = { Wins = 0; Losses = 0; Draws = 0; Points = 0; GoalsFor = 0; GoalsAgainst = 0 }
 
-            let activeFor startIdx =
-                match gs.BallState with
-                | HeldBy owner when owner >= startIdx + skipGoalie && owner < startIdx + ppt -> owner
-                | _ -> findNearestToBall gs (startIdx + skipGoalie) (startIdx + ppt - 1)
+type League =
+    { Standings: TeamStanding array   // never mutated in place
+      /// Full round-robin: Schedule[round] = array of (team1, team2) matchups
+      Schedule: (int * int) array array
+      Rand: Rand
+      CurrentRound: int
+      Finished: bool
+      HumanTeam: int }
 
-            gs.ActivePlayer1 <- activeFor 0
-            gs.ActivePlayer2 <- activeFor t2s
-
-            // Process both teams
-            processTeam
-                gs
-                true
-                gs.Team1Human
-                gs.ActivePlayer1
-                gs.Input1
-                &gs.FireHoldTicks1
-
-            processTeam
-                gs
-                false
-                gs.Team2Human
-                gs.ActivePlayer2
-                gs.Input2
-                &gs.FireHoldTicks2
-
-            // Possession timer — auto-shoot when it expires
-            match gs.BallState with
-            | HeldBy owner ->
-                gs.PossessionTimer <- gs.PossessionTimer - 1<tick>
-
-                if gs.PossessionTimer <= 0<tick> then
-                    let ent = gs.Entities[owner]
-                    let vx = ent.VelX
-                    let vy = ent.VelY
-                    releaseBall gs owner 1.0
-                    ent.VelX <- -vx
-                    ent.VelY <- -vy
-            | Free -> ()
-
-            // Ball friction: only every 8th tick (when BallFrictionCounter resets)
-            let mutable applyBallFric = false
-
-            match gs.BallState with
-            | HeldBy _ -> moveBallPossessed gs
-            | Free ->
-                gs.BallFrictionCounter <- gs.BallFrictionCounter - 1
-
-                if gs.BallFrictionCounter <= 0 then
-                    gs.BallFrictionCounter <- BallAnimFrames
-                    applyBallFric <- true
-
-            // Friction: every tick for players, every 8th tick for the free ball
-            for i in 0 .. gs.NumEntities - 1 do
-                if i = gs.BallIdx then
-                    if applyBallFric then
-                        applyFriction gs.Entities[i]
-                else
-                    applyFriction gs.Entities[i]
-
-            // Teammate separation: push same-team players apart when too close (6v6 only)
-            if gs.FivePlayerMode then
-                let sepDist = float TeammateSeparationDist
-                let sepDistSq = sepDist * sepDist
-                let sepForce = TeammateSeparationForce
-
-                let pushApart startIdx count =
-                    for i in startIdx .. startIdx + count - 2 do
-                        for j in i + 1 .. startIdx + count - 1 do
-                            let ei = gs.Entities[i]
-                            let ej = gs.Entities[j]
-                            let dx = float (ei.X - ej.X)
-                            let dy = float (ei.Y - ej.Y)
-                            let distSq = dx * dx + dy * dy
-                            if distSq < sepDistSq && distSq > 0.01 then
-                                let dist = sqrt distSq
-                                let nx = dx / dist
-                                let ny = dy / dist
-                                ei.VelX <- ei.VelX + nx * sepForce
-                                ei.VelY <- ei.VelY + ny * sepForce
-                                ej.VelX <- ej.VelX - nx * sepForce
-                                ej.VelY <- ej.VelY - ny * sepForce
-
-                pushApart 0 ppt
-                pushApart t2s ppt
-
-            // When a player is (near-)stationary, face toward the puck
-            let ball = gs.Entities[gs.BallIdx]
-            for i in 0 .. gs.NumEntities - 1 do
-                if i <> gs.BallIdx then
-                    let ent = gs.Entities[i]
-                    let speedSq = float ent.VelX * float ent.VelX + float ent.VelY * float ent.VelY
-                    if speedSq < 4.0 then  // effectively stopped
-                        let dx = float (ball.X - ent.X)
-                        let dy = float (ball.Y - ent.Y)
-                        if abs dx > 2.0 || abs dy > 2.0 then
-                            ent.DirX <- float (sign dx)
-                            ent.DirY <- float (sign dy)
-
-            // Ice trail: detect tight turns and leave skate marks
-            // A tight turn = direction changed significantly while moving fast
-            for i in 0 .. gs.NumPlayers - 1 do
-                let ent = gs.Entities[i]
-                let speedSq = float ent.VelX * float ent.VelX + float ent.VelY * float ent.VelY
-                let prevDx = gs.PrevDirX[i]
-                let prevDy = gs.PrevDirY[i]
-                // Dot product of previous and current direction: < 0 means >90 degree turn
-                let dot = ent.DirX * prevDx + ent.DirY * prevDy
-                if speedSq > 100.0 && dot < 0.1 && (prevDx <> 0.0 || prevDy <> 0.0) then
-                    let markIdx = gs.TrailMarkHead
-                    let mark = gs.TrailMarks[markIdx]
-                    mark.X <- ent.X
-                    mark.Y <- ent.Y
-                    mark.Life <- TrailMarkLifetime
-                    gs.TrailMarkHead <- (markIdx + 1) % MaxTrailMarks
-                    if gs.TrailMarkCount < MaxTrailMarks then
-                        gs.TrailMarkCount <- gs.TrailMarkCount + 1
-                // Update previous direction
-                gs.PrevDirX[i] <- ent.DirX
-                gs.PrevDirY[i] <- ent.DirY
-
-            // Decay trail marks
-            for i in 0 .. gs.TrailMarkCount - 1 do
-                let mark = gs.TrailMarks[i]
-                if mark.Life > 0<tick> then
-                    mark.Life <- mark.Life - 1<tick>
-
-            // Move entities and check walls/goals
-            let mutable goalScored = false
-
-            for i in 0 .. gs.NumEntities - 1 do
-                let ent = gs.Entities[i]
-                ent.X <- ent.X + ent.VelX * 1.0<tick> / SubPixelUnit
-                ent.Y <- ent.Y + ent.VelY * 1.0<tick> / SubPixelUnit
-
-                if checkWallsAndGoals gs i then
-                    goalScored <- true
-
-            if not goalScored then
-                checkBallPickup gs
-
-                if checkStalemate gs then
-                    resetPositions gs
-
-            // Clock
-            updateClock gs
-
-            // Period end check (deferred while a goal flash is showing)
-            if gs.ClockSeconds >= gs.PeriodLength && gs.GoalFlashTimer <= 0<tick> then
-                gs.CurrentPeriod <- gs.CurrentPeriod + 1
-
-                if gs.CurrentPeriod >= gs.NumPeriods then
-                    gs.Playing <- false
-                else
-                    gs.ClockSeconds <- 0<sec>
-                    gs.ClockTick <- 0<tick>
-                    resetPositions gs
-
-// ─── League Mode ───────────────────────────────────────────────────────
-
-/// Generate full round-robin schedule for N teams (N must be even).
-/// Returns an array of rounds; each round is an array of (team1, team2) matchups.
-/// Uses the standard circle method: fix team 0, rotate the rest.
+/// Generate full round-robin schedule for N teams (N must be even) using the
+/// standard circle method: fix team 0, rotate the rest.
 let generateSchedule (numTeams: int) =
     let n = numTeams
-    // teams list excluding the fixed pivot (team index 0 in rotation, not team-idx 0)
-    let rotating = [| 0 .. n - 1 |]
-    // We use indices 0..n-1 directly; fix index 0 as pivot
-    let rot = Array.init (n - 1) id // rotation slots: 1 .. n-1
     let rounds = Array.init (n - 1) (fun _ -> Array.zeroCreate<int * int> (n / 2))
-
     for r in 0 .. n - 2 do
-        // Build current arrangement: pivot (index 0) + rotated list
         let arrangement = Array.zeroCreate n
         arrangement[0] <- 0
-
         for i in 0 .. n - 2 do
-            arrangement[i + 1] <- rot[(i + r) % (n - 1)] + 1
-
-        // Pair first with last, second with second-to-last, etc.
-        for m in 0 .. (n / 2) - 1 do
-            rounds[r][m] <- (arrangement[m], arrangement[n - 1 - m])
-
+            arrangement[i + 1] <- (i + r) % (n - 1) + 1
+        for p in 0 .. (n / 2) - 1 do
+            rounds[r][p] <- (arrangement[p], arrangement[n - 1 - p])
     rounds
 
-let createTeamStats () =
-    { Wins = 0
-      Losses = 0
-      Draws = 0
-      Points = 0
-      GoalsFor = 0
-      GoalsAgainst = 0 }
+let createLeague humanTeam (seed: uint64) =
+    let schedule = generateSchedule NumTeams
 
-let createLeagueState humanTeam =
-    { Stats = Array.init NumTeams (fun _ -> createTeamStats ())
-      Schedule = generateSchedule NumTeams
-      Rng = Random()
+    // Shuffle the round order (Fisher-Yates) so the human faces opponents in
+    // a random order each league. Every round is still a full round.
+    let mutable rand = Rand.make seed
+    for i in schedule.Length - 1 .. -1 .. 1 do
+        let r', j = Rand.nextInt (i + 1) rand
+        rand <- r'
+        let tmp = schedule[i]
+        schedule[i] <- schedule[j]
+        schedule[j] <- tmp
+
+    { Standings = Array.init NumTeams (fun _ -> TeamStanding.empty)
+      Schedule = schedule
+      Rand = rand
       CurrentRound = 0
       Finished = false
       HumanTeam = humanTeam }
 
-/// Record match result for both teams
-let recordMatchResult (league: LeagueState) team1Idx team2Idx team1Goals team2Goals =
-    let s1 = league.Stats[team1Idx]
-    let s2 = league.Stats[team2Idx]
-    s1.GoalsFor <- s1.GoalsFor + team1Goals
-    s1.GoalsAgainst <- s1.GoalsAgainst + team2Goals
-    s2.GoalsFor <- s2.GoalsFor + team2Goals
-    s2.GoalsAgainst <- s2.GoalsAgainst + team1Goals
+/// Record a match result for both teams (pure).
+let recordMatchResult team1Idx team2Idx team1Goals team2Goals (league: League) =
+    let standings = Array.copy league.Standings
+    let s1 = standings[team1Idx]
+    let s2 = standings[team2Idx]
+    let s1 = { s1 with GoalsFor = s1.GoalsFor + team1Goals; GoalsAgainst = s1.GoalsAgainst + team2Goals }
+    let s2 = { s2 with GoalsFor = s2.GoalsFor + team2Goals; GoalsAgainst = s2.GoalsAgainst + team1Goals }
+    let s1, s2 =
+        if team1Goals > team2Goals then
+            { s1 with Wins = s1.Wins + 1; Points = s1.Points + 2 }, { s2 with Losses = s2.Losses + 1 }
+        elif team2Goals > team1Goals then
+            { s1 with Losses = s1.Losses + 1 }, { s2 with Wins = s2.Wins + 1; Points = s2.Points + 2 }
+        else
+            { s1 with Draws = s1.Draws + 1; Points = s1.Points + 1 },
+            { s2 with Draws = s2.Draws + 1; Points = s2.Points + 1 }
+    standings[team1Idx] <- s1
+    standings[team2Idx] <- s2
+    { league with Standings = standings }
 
-    if team1Goals > team2Goals then
-        s1.Wins <- s1.Wins + 1
-        s1.Points <- s1.Points + 2
-        s2.Losses <- s2.Losses + 1
-    elif team2Goals > team1Goals then
-        s2.Wins <- s2.Wins + 1
-        s2.Points <- s2.Points + 2
-        s1.Losses <- s1.Losses + 1
-    else
-        s1.Draws <- s1.Draws + 1
-        s1.Points <- s1.Points + 1
-        s2.Draws <- s2.Draws + 1
-        s2.Points <- s2.Points + 1
-
-/// Simulate a single CPU-vs-CPU match.
-/// Each team's expected goals = baseGoals * strength; actual goals are Poisson-sampled.
-/// Scores clamped to 0..10.
-let simulateCpuGoals (rng: Random) (strength: float) =
-    // Expected goals: ranges from ~1.5 (weakest) to ~5.0 (strongest)
+/// Simulate a single CPU-vs-CPU team's goals: Poisson-sampled expected goals
+/// from team strength, clamped to 0..10.
+let simulateCpuGoals (strength: float) (rand: Rand) =
     let lambda = 1.5 + strength * 3.5
-    // Poisson sampling via Knuth's method
+    let l = exp -lambda
+    let mutable rand = rand
     let mutable k = 0
     let mutable p = 1.0
-    let l = exp (-lambda)
-
     while p > l do
+        let r', f = Rand.nextFloat rand
+        rand <- r'
         k <- k + 1
-        p <- p * rng.NextDouble()
-
-    min 10 (max 0 (k - 1))
+        p <- p * f
+    rand, min 10 (max 0 (k - 1))
 
 /// Simulate all CPU-vs-CPU matches for the given round and record results.
-let simulateCpuRound (league: LeagueState) (roundIdx: int) =
-    let round = league.Schedule[roundIdx]
-
-    for (t1, t2) in round do
+let simulateCpuRound (roundIdx: int) (league: League) =
+    let mutable league' = league
+    let mutable rand = league.Rand
+    for t1, t2 in league.Schedule[roundIdx] do
         // Skip the matchup involving the human team (already played live)
         if t1 <> league.HumanTeam && t2 <> league.HumanTeam then
-            let goals1 = simulateCpuGoals league.Rng teamStrength[t1]
-            let goals2 = simulateCpuGoals league.Rng teamStrength[t2]
-            recordMatchResult league t1 t2 goals1 goals2
+            let r1, goals1 = simulateCpuGoals teamStrength[t1] rand
+            let r2, goals2 = simulateCpuGoals teamStrength[t2] r1
+            rand <- r2
+            league' <- recordMatchResult t1 t2 goals1 goals2 league'
+    { league' with Rand = rand }
 
 /// Sort standings by points descending, goal difference as tiebreak
-let getSortedStandings (league: LeagueState) =
-    [| for i in 0 .. NumTeams - 1 -> (i, league.Stats[i]) |]
+let getSortedStandings (league: League) =
+    league.Standings
+    |> Array.indexed
     |> Array.sortByDescending (fun (_, s) -> s.Points, s.GoalsFor - s.GoalsAgainst)
 
-/// Advance to next round; returns true if league is complete
-let advanceRound (league: LeagueState) =
-    league.CurrentRound <- league.CurrentRound + 1
-
-    if league.CurrentRound >= league.Schedule.Length then
-        league.Finished <- true
-
-    league.Finished
+/// Advance to next round (pure); Finished set when the schedule is exhausted.
+let advanceRound (league: League) =
+    let round = league.CurrentRound + 1
+    { league with CurrentRound = round; Finished = round >= league.Schedule.Length }
 
 /// Get the human team's matchup for the current round (human always returned as t1)
-let currentMatchup (league: LeagueState) =
+let currentMatchup (league: League) =
     let round = league.Schedule[league.CurrentRound]
-    let (a, b) =
-        round
-        |> Array.find (fun (t1, t2) -> t1 = league.HumanTeam || t2 = league.HumanTeam)
-    if a = league.HumanTeam then (a, b) else (b, a)
+    match round |> Array.tryFind (fun (t1, t2) -> t1 = league.HumanTeam || t2 = league.HumanTeam) with
+    | Some (a, b) -> if a = league.HumanTeam then (a, b) else (b, a)
+    // Unreachable with an even team count; fall back rather than throw
+    | None -> round[0]
