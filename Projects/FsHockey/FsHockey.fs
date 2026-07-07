@@ -89,6 +89,9 @@ module FsHockeyExtensions =
         member this.GetRequest world : GameplayRequest = this.Get (nameof Screen.Request) world
         member this.SetRequest (value : GameplayRequest) world = this.Set (nameof Screen.Request) value world
         member this.Request = lens (nameof Screen.Request) this this.GetRequest this.SetRequest
+        member this.GetPaused world : bool = this.Get (nameof Screen.Paused) world
+        member this.SetPaused (value : bool) world = this.Set (nameof Screen.Paused) value world
+        member this.Paused = lens (nameof Screen.Paused) this this.GetPaused this.SetPaused
 
 // ─── Coordinate Mapping ───────────────────────────────────────────────
 // Game: top-left origin (0,0), X right, Y down, ~320x200 field + HUD
@@ -130,6 +133,7 @@ module Colors =
     let white = color 1.0f 1.0f 1.0f 1.0f
     let gray = color 0.627f 0.627f 0.627f 1.0f
     let dim = color 0.412f 0.412f 0.49f 1.0f
+    let activeMarker = color 0.353f 1.0f 0.471f 1.0f   // green caret over the controlled player
     // button label color: the default ButtonUp/ButtonDown images are dark
     // green, so labels want to be near-white
     let buttonText = color 0.94f 0.94f 0.94f 1.0f
@@ -371,7 +375,7 @@ module Draw =
                 [Entity.Position @= basePos + v3 0.0f (8.0f * us) 0.0f
                  Entity.Size .= Coords.nuSize (3.0f * u) (2.0f * u)
                  Entity.StaticImage .= Assets.Default.White
-                 Entity.Color .= Colors.white
+                 Entity.Color .= Colors.activeMarker
                  Entity.Elevation .= 1.2f] world |> ignore
 
     let hud (m: Match) world =
@@ -400,10 +404,17 @@ module Draw =
         hudText "HudT2Name" (Coords.screenPos 280.0f (hudY + 8.0f)) (Coords.nuSize 100.0f 14.0f) teamNames[m.Team2Idx] JustifyRight Colors.team2 (Some 8.0f)
         hudText "HudT2Score" (Coords.screenPos 280.0f (hudY + 22.0f)) (Coords.nuSize 60.0f 20.0f) $"{m.Team2Score}" JustifyRight Colors.team2 None
 
-        let secs = int m.ClockSeconds
+        // clock counts DOWN to the period end
+        let secs = max 0 (int m.PeriodLength - int m.ClockSeconds)
         hudText "HudClock" (Coords.screenPos 160.0f (hudY + 8.0f)) (Coords.nuSize 80.0f 20.0f) $"{secs / 60}:{secs % 60:D2}" JustifyCenter Colors.hudText None
-        if m.NumPeriods > 1 then
-            hudText "HudPeriod" (Coords.screenPos 160.0f (hudY + 22.0f)) (Coords.nuSize 120.0f 14.0f) $"PERIOD {m.CurrentPeriod + 1} of {m.NumPeriods}" JustifyCenter Colors.hudText (Some 8.0f)
+
+        // period info ("FINAL RESULT" once the match is over)
+        let periodStr =
+            if not m.Playing && m.ClockSeconds >= m.PeriodLength then "FINAL RESULT"
+            elif m.NumPeriods > 1 then $"PERIOD {m.CurrentPeriod + 1} of {m.NumPeriods}"
+            else ""
+        if periodStr <> "" then
+            hudText "HudPeriod" (Coords.screenPos 160.0f (hudY + 22.0f)) (Coords.nuSize 120.0f 14.0f) periodStr JustifyCenter Colors.hudText (Some 8.0f)
 
 // ─── Gameplay Screen ──────────────────────────────────────────────────
 type GameplayDispatcher () =
@@ -412,16 +423,25 @@ type GameplayDispatcher () =
     static member Properties =
         [define Screen.MatchState Defaults.matchState
          define Screen.LeagueMode false
-         define Screen.Request NoRequest]
+         define Screen.Request NoRequest
+         define Screen.Paused false]
 
     override this.Process (_, screen, world) =
         if screen.GetSelected world then
+
+            // P pauses/resumes the match
+            if world.Advancing
+               && (screen.GetMatchState world).Playing
+               && World.isKeyboardKeyPressed KeyboardKey.P world then
+                screen.SetPaused (not (screen.GetPaused world)) world
+
+            let paused = screen.GetPaused world
 
             // advance the simulation: one pure step from Match to Match. The
             // whole game state (including its PRNG) is an immutable value on
             // this screen, so the editor can undo/redo live gameplay.
             let gamepadOn = (Game.GetSettings world).GamepadEnabled
-            if world.Advancing && (screen.GetMatchState world).Playing then
+            if world.Advancing && not paused && (screen.GetMatchState world).Playing then
                 let input1 = HockeyInput.player1 gamepadOn world
                 let input2 = if screen.GetLeagueMode world then Input.none else HockeyInput.player2 gamepadOn world
                 screen.MatchState.Map (gameTick input1 input2) world
@@ -506,6 +526,40 @@ type GameplayDispatcher () =
                      Entity.TextColor .= Colors.white
                      Entity.Elevation .= 6.0f] world
 
+            // period start banner (like the goal flash, play holds under it)
+            if m.PeriodFlashTimer > 0<tick> && m.GoalFlashTimer <= 0<tick> then
+                World.doText "PeriodBanner"
+                    [Entity.Position .= v3 0.0f 30.0f 0.0f
+                     Entity.Size .= v3 300.0f 32.0f 0.0f
+                     Entity.Text @= $"PERIOD {m.CurrentPeriod + 1}"
+                     Entity.Justification .= Justified (JustifyCenter, JustifyMiddle)
+                     Entity.TextColor .= Colors.goalFlash
+                     Entity.Elevation .= 6.0f] world
+
+            // pause overlay
+            if paused then
+                World.doStaticSprite "PauseBg"
+                    [Entity.Position .= v3 0.0f 0.0f 0.0f
+                     Entity.Size .= v3 720.0f 558.0f 0.0f
+                     Entity.StaticImage .= Assets.Default.White
+                     Entity.Color .= color 0.0f 0.0f 0.0f 0.55f
+                     Entity.Elevation .= 9.0f] world |> ignore
+                World.doText "PauseTitle"
+                    [Entity.Position .= v3 0.0f 20.0f 0.0f
+                     Entity.Size .= v3 300.0f 32.0f 0.0f
+                     Entity.Text .= "PAUSED"
+                     Entity.Justification .= Justified (JustifyCenter, JustifyMiddle)
+                     Entity.TextColor .= Colors.goalFlash
+                     Entity.Elevation .= 10.0f] world
+                World.doText "PauseHint"
+                    [Entity.Position .= v3 0.0f -14.0f 0.0f
+                     Entity.Size .= v3 300.0f 20.0f 0.0f
+                     Entity.Text .= "Press P to continue"
+                     Entity.Justification .= Justified (JustifyCenter, JustifyMiddle)
+                     Entity.TextColor .= Colors.gray
+                     Entity.FontSizing .= Some 10.0f
+                     Entity.Elevation .= 10.0f] world
+
             // game-over overlay with inline-handled buttons
             if matchOver m then
                 World.doStaticSprite "GameOverBg"
@@ -587,6 +641,7 @@ type FsHockeyDispatcher () =
                   FivePlayer = s.FivePlayer; FastHuman = s.FastHuman; HardMode = s.HardMode
                   NumPeriods = ExhibitionPeriods; Seed = FsHockeyDispatcher.FreshSeed world }) world
         Simulants.Gameplay.SetLeagueMode false world
+        Simulants.Gameplay.SetPaused false world
         game.SetHockeyMode HockeyPlaying world
 
     static member private StartLeagueMatch (game: Game) (league: League) world =
@@ -599,6 +654,7 @@ type FsHockeyDispatcher () =
                   FivePlayer = s.FivePlayer; FastHuman = s.FastHuman; HardMode = s.HardMode
                   NumPeriods = LeaguePeriods; Seed = FsHockeyDispatcher.FreshSeed world }) world
         Simulants.Gameplay.SetLeagueMode true world
+        Simulants.Gameplay.SetPaused false world
         game.SetHockeyMode HockeyLeaguePlaying world
 
     override this.Process (game, world) =
@@ -781,7 +837,7 @@ type FsHockeyDispatcher () =
         // roughly game-y 10..205, so these sit right under the action row)
         let instrLines =
             [| "P1: Arrows + RShift/Enter or Pad 1  |  P2: WASD + Space/Tab or Pad 2  |  hold shoot for a harder shot"
-               "Pick HUMAN PLAYER for keyboard control  |  click a team or use UP/DOWN + TAB" |]
+               "Pick HUMAN PLAYER for keyboard control  |  click a team or use UP/DOWN + TAB  |  P pauses" |]
         for i in 0 .. instrLines.Length - 1 do
             World.doText $"Instr{i}"
                 [Entity.Position .= Coords.screenPos 160.0f (200.0f + float32 i * 9.0f)

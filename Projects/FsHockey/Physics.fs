@@ -197,6 +197,22 @@ let AiWanderIntervalTicks = 40<tick>
 /// never handed to the AI mid-move (CPU teams switch on exact nearest)
 let AiActiveSwitchMargin = 42.0<px>
 
+/// Top-speed fraction for non-active players drifting back to their base
+/// position while the puck is loose (nobody owns it) — no need to sprint
+let AiReturnSpeedFrac = 0.55
+
+/// Skaters bounce off a goalie's body instead of skating through it
+let GoalieBodyRadius = 9.0<px>
+
+/// The carrier dekes around the goalie when the goalie's Y is within this
+/// distance of the carrier's Y (goalie lined up to block the shot)
+let AiGoalieAvoidY = 10.0<px>
+/// Lateral offset (from the goalie) the carrier cuts to when deking
+let AiGoalieDekeOffset = 16.0<px>
+
+/// Ticks the "PERIOD X" banner shows (and play holds) at each period start
+let PeriodFlashTicks = 60<tick>
+
 /// Skating speed shown in the menu for a team, with the current fast-human
 /// and hard-mode settings applied (same formula the match setup uses)
 let displayedTeamSpeed (fastHuman: bool) (hardMode: bool) (teamIdx: int) =
