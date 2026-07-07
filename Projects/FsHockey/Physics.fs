@@ -18,10 +18,10 @@ type tick // game ticks
 type sec // game-clock seconds
 
 // ─── Entity Layout ─────────────────────────────────────────────────────
-// Entities stored in array: Team 1 players, Team 2 players, Ball (last)
-// 3-player mode: 0-2 = Team 1, 3-5 = Team 2, 6 = Ball (7 total)
+// Entities stored in array: Team 1 players, Team 2 players, Puck (last)
+// 3-player mode: 0-2 = Team 1, 3-5 = Team 2, 6 = Puck (7 total)
 // 5-player mode: 0-5 = Team 1 (0=goalie, 1-2=forwards, 3-4=wings, 5=extra fwd),
-//                6-11 = Team 2, 12 = Ball (13 total)
+//                6-11 = Team 2, 12 = Puck (13 total)
 
 [<Literal>]
 let PlayersPerTeam3 = 3
@@ -48,7 +48,7 @@ let GoalTop = 56.0<px>
 let GoalBottom = 104.0<px>
 let GoalLeftX = 10.0<px>
 let GoalRightX = 294.0<px>
-// True field center: (FieldLeft + FieldRight) / 2. The faceoff ball spawns
+// True field center: (FieldLeft + FieldRight) / 2. The faceoff puck spawns
 // here; if it is off-center one team is closer to it and wins every faceoff.
 let CenterX = 152.0<px>
 let CenterY = 80.0<px>
@@ -117,8 +117,8 @@ let ForwardAccel = 2.0<subpx / tick>
 /// Goalie top speed regardless of team stats (much slower than skaters)
 let GoalieMaxSpeed = 12.0<subpx / tick>
 
-let BallMaxSpeed = 16.0<subpx / tick>
-let BallAnimFrames = 8
+let PuckMaxSpeed = 16.0<subpx / tick>
+let PuckAnimFrames = 8
 
 // ─── Shoot / Pass Charge ──────────────────────────────────────────────
 // Hold fire key longer for a harder shot. Quick tap = pass (weaker).
@@ -192,10 +192,10 @@ let AiWanderRange = 14.0<px>
 let AiWanderIntervalTicks = 40<tick>
 
 /// Hysteresis for human-team active-player selection: the control marker
-/// only jumps to a teammate at least this many px closer to the ball, so
+/// only jumps to a teammate at least this many px closer to the puck, so
 /// control doesn't thrash between players and the player being steered is
 /// never handed to the AI mid-move (CPU teams switch on exact nearest)
-let AiActiveSwitchMargin = 24.0<px>
+let AiActiveSwitchMargin = 42.0<px>
 
 /// Skating speed shown in the menu for a team, with the current fast-human
 /// and hard-mode settings applied (same formula the match setup uses)
@@ -258,7 +258,7 @@ let team1HomeY = [| 80.0<px>; 50.0<px>; 110.0<px> |]
 let team2HomeX = [| 204.0<px>; 244.0<px>; 124.0<px> |]
 let team2HomeY = [| 80.0<px>; 50.0<px>; 110.0<px> |]
 
-// Shifted positions when team has ball (offset toward opponent goal).
+// Shifted positions when team has puck (offset toward opponent goal).
 // Team 1 attacks right (larger X), team 2 attacks left (smaller X):
 // center pushes up to a forward spot, forward goes deep, defender holds
 // around center ice as the safety valve.

@@ -447,15 +447,15 @@ type GameplayDispatcher () =
                          Entity.Elevation .= 0.1f] world |> ignore
 
             // puck
-            let ball = m.Entities[m.BallIdx]
+            let puck = m.Entities[m.PuckIdx]
             World.doStaticSprite "Puck"
-                [Entity.Position @= Coords.nuPos ball.X ball.Y
+                [Entity.Position @= Coords.nuPos puck.X puck.Y
                  Entity.Size .= Coords.nuSize 5.0f 5.0f
                  Entity.StaticImage .= Assets.Default.White
                  Entity.Color .= Colors.puck
                  Entity.Elevation .= 0.5f] world |> ignore
             World.doStaticSprite "PuckHL"
-                [Entity.Position @= Coords.nuPos ball.X ball.Y + v3 0.0f 0.5f 0.0f
+                [Entity.Position @= Coords.nuPos puck.X puck.Y + v3 0.0f 0.5f 0.0f
                  Entity.Size .= Coords.nuSize 2.0f 2.0f
                  Entity.StaticImage .= Assets.Default.White
                  Entity.Color .= color 0.235f 0.235f 0.235f 1.0f
