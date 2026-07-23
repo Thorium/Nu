@@ -31,9 +31,14 @@ module CardImg =
     let cardAsset (card: Card) : Image AssetTag =
         asset<Image> "Default" ($"{suitPrefix card.Suit}{rankSuffix card.Rank}")
 
-    /// Card back image (back design name chosen per-game, e.g. "back1").
+    /// Deck image (scenic design with stacked edges baked in, chosen per-game,
+    /// e.g. "back1") — used for the deck pile and deck icon only.
     let backAsset (backName: string) : Image AssetTag =
         asset<Image> "Default" backName
+
+    /// Plain single-card back for face-down hand cards (not the deck image).
+    let handBackAsset : Image AssetTag =
+        asset<Image> "Default" "back"
 
 // ─── Layout Constants ─────────────────────────────────────────────────
 // Nu virtual resolution is 640×360 → visible range ±320 (X) × ±180 (Y)
@@ -50,6 +55,27 @@ module Ly =
     let topOppY = 135.0f         // top opponent
     let sideLeftX = -285.0f
     let sideRightX = 285.0f
+
+    /// Which edge of the table a player occupies, viewed from the bottom seat.
+    type Seat =
+        | SeatBottom
+        | SeatLeft
+        | SeatTop
+        | SeatRight
+
+    /// Seats advance clockwise (seen from above, like poker): the player after
+    /// the bottom seat sits on the left, then the top, then the right — so the
+    /// index turn order reads clockwise around the table. The lone opponent of
+    /// a 2-player game stays at the top.
+    let seatOf (playerCount: int) (bottomIdx: int) (idx: int) =
+        match playerCount, (idx - bottomIdx + playerCount) % playerCount with
+        | _, 0 -> SeatBottom
+        | 2, _ -> SeatTop
+        | 3, 1 -> SeatLeft
+        | 3, _ -> SeatTop
+        | _, 1 -> SeatLeft
+        | _, 2 -> SeatTop
+        | _, _ -> SeatRight
 
     let tableW = 500.0f
     let tableH = 130.0f

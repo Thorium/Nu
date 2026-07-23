@@ -75,6 +75,7 @@ type Gameplay =
       LastChat: string
       LastEval: AI.PlayEvaluation option
       ScoreBreakdowns: (Player * Scoring.ScoreBreakdown) list
+      Carry: Scoring.CarryOver             // undistributed most-cards/most-spades pot from tied rounds
       PlayAnim: CardAnim option            // card sliding hand → table
       CollectAnim: CollectAnim option      // captured cards sliding table → player
       DealSteps: DealStep list             // current deal's slide sequence
@@ -91,7 +92,8 @@ type Gameplay =
           DealRound = 0
           TotalDeals = 0
           LastCapturer = None
-          Variant = StandardKasino }
+          Variant = StandardKasino
+          SweepsFrozen = false }
 
     /// Unutilized model (screen not selected).
     static member empty =
@@ -112,6 +114,7 @@ type Gameplay =
           LastChat = ""
           LastEval = None
           ScoreBreakdowns = []
+          Carry = Scoring.CarryOver.zero
           PlayAnim = None
           CollectAnim = None
           DealSteps = []
@@ -236,7 +239,9 @@ module GameplayLogic =
     /// Score the just-finished round and advance to RoundOver/GameOver.
     let enterRoundOver (gp: Gameplay) =
         let finalState = GameEngine.endRound gp.State
-        let breakdowns = Scoring.calculateScores finalState.Players
+        // Tied most-cards/most-spades points ride the carry-over pot into the
+        // next round; an outright winner collects the whole pot.
+        let breakdowns, carryOut = Scoring.calculateScoresCarry gp.Carry finalState.Players
         let cumulative =
             breakdowns
             |> List.fold (fun acc (p, s) ->
@@ -248,28 +253,41 @@ module GameplayLogic =
             State = finalState
             ScoreBreakdowns = breakdowns
             CumulativeScores = cumulative
+            Carry = carryOut
             Phase = (if gameOver then GameOver else RoundOver)
             PhaseTicks = 0L
             SelectedCardIndex = None
             CapturePreview = NoCapture
             LastChat = ""
             LastPlayMessage =
+                // The last capturer takes whatever remained on the table
+                // (endRound above) — say so, since the cards leave silently.
                 if gameOver then "Game over!"
-                else $"Round {gp.RoundNumber} complete" }
+                else
+                    match gp.State.LastCapturer, gp.State.Table with
+                    | Some idx, (_ :: _ as rest) ->
+                        $"{gp.State.Players[idx].Name} takes the rest of the table ({List.length rest} cards)"
+                    | _ -> $"Round {gp.RoundNumber} complete" }
 
     /// Build the deal-animation step sequence. The first deal also lays 4 cards
     /// on the table; every deal gives each seat 2 cards, twice.
     let buildDealSteps (state: GameEngine.GameState) (isFirst: bool) =
-        let bottomSeat =
-            state.Players |> List.tryFindIndex (fun p -> p.Type = Human)
-            |> Option.defaultValue state.CurrentPlayerIndex
-        let seatDest seat = if seat = bottomSeat then Ly.handY else Ly.topOppY
-        let tableStep = { Target = DealToTable; Count = 4; ToX = 0.0f; ToY = Ly.tableY }
-        let playerSteps =
-            [ for _ in 1 .. 2 do
-                for seat in 0 .. state.Players.Length - 1 do
-                    { Target = DealToSeat seat; Count = 2; ToX = 0.0f; ToY = seatDest seat } ]
-        if isFirst then tableStep :: playerSteps else playerSteps
+        let bottomSeat = 0   // fixed viewpoint: seat 0 is the bottom seat, also in watch mode
+        let seatDest seat =
+            match Ly.seatOf state.Players.Length bottomSeat seat with
+            | Ly.SeatBottom -> (0.0f, Ly.handY)
+            | Ly.SeatTop -> (0.0f, Ly.topOppY)
+            | Ly.SeatLeft -> (Ly.sideLeftX, 0.0f)
+            | Ly.SeatRight -> (Ly.sideRightX, 0.0f)
+        // Deal like at a real table: two passes of 2 cards to each player, and
+        // on the first deal each pass ends with 2 cards to the table — so the
+        // table receives its 4 starting cards 2 at a time, after the players.
+        [ for _ in 1 .. 2 do
+            for seat in 0 .. state.Players.Length - 1 do
+                let (dx, dy) = seatDest seat
+                { Target = DealToSeat seat; Count = 2; ToX = dx; ToY = dy }
+            if isFirst then
+                { Target = DealToTable; Count = 2; ToX = 0.0f; ToY = Ly.tableY } ]
 
     /// Decide what happens at the start of a turn: deal the next deal, finish the
     /// round, or hand control to whoever is up next.
@@ -302,14 +320,23 @@ module GameplayLogic =
         let preHand = mover.Hand
         let preTable = gp.State.Table
         let playedCard = tr.Evaluation.HandCard
-        let isBottom = mover.Type = Human
         let scatter = gp.Config.Settings.DefaultScatter
+        // The viewpoint is fixed (seat 0 at the bottom, also in watch mode),
+        // so each player's animations anchor to its own seat.
+        let tableSeat = Ly.seatOf gp.State.Players.Length 0 seat
         // where the played card slides FROM
         let fromX, fromY =
-            if isBottom then
+            match tableSeat with
+            | Ly.SeatBottom ->
                 let idx = preHand |> List.tryFindIndex ((=) playedCard) |> Option.defaultValue 0
                 Ly.handPos (List.length preHand) idx
-            else (0.0f, Ly.topOppY)
+            | Ly.SeatLeft | Ly.SeatRight ->
+                let idx = preHand |> List.tryFindIndex ((=) playedCard) |> Option.defaultValue 0
+                let step = Ly.cardH / 3.0f
+                let top = float32 (List.length preHand - 1) * step / 2.0f
+                let x = if tableSeat = Ly.SeatLeft then Ly.sideLeftX else Ly.sideRightX
+                (x, top - float32 idx * step)
+            | Ly.SeatTop -> (0.0f, Ly.topOppY)
         // play + collect specs depend on whether this was a capture or a placement
         let playAnim, collectAnim =
             match tr.PlayResult with
@@ -319,7 +346,12 @@ module GameplayLogic =
                 Some { Card = playedCard; FromX = fromX; FromY = fromY; ToX = toX; ToY = toY }, None
             | Capture (_, captured, _) ->
                 let play = Some { Card = playedCard; FromX = fromX; FromY = fromY; ToX = 0.0f; ToY = Ly.tableY }
-                let destY = if isBottom then Ly.handY - 40.0f else Ly.topOppY + 40.0f
+                let destX, destY =
+                    match tableSeat with
+                    | Ly.SeatBottom -> 0.0f, Ly.handY - 40.0f
+                    | Ly.SeatTop    -> 0.0f, Ly.topOppY + 40.0f
+                    | Ly.SeatLeft   -> Ly.sideLeftX - 40.0f, 0.0f
+                    | Ly.SeatRight  -> Ly.sideRightX + 40.0f, 0.0f
                 let cards =
                     captured |> List.map (fun c ->
                         let idx = preTable |> List.tryFindIndex ((=) c) |> Option.defaultValue 0
@@ -327,7 +359,7 @@ module GameplayLogic =
                         // honour any manual nudge so the card slides from where it sat
                         let ox, oy = gp.TableOffsets |> Map.tryFind c |> Option.defaultValue (0.0f, 0.0f)
                         (c, cx + ox, cy + oy))
-                play, Some { Cards = cards; ToX = 0.0f; ToY = destY }
+                play, Some { Cards = cards; ToX = destX; ToY = destY }
         { gp with
             State = tr.NewState
             LastEval = Some tr.Evaluation
@@ -346,6 +378,8 @@ module GameplayLogic =
         let rng = Random ()
         let roundNo = gp.RoundNumber + 1
         let state = GameEngine.newRound gp.Config rng gp.State.Players roundNo
+        // 10-point freeze: sweeps stop scoring once anyone has 10+ points.
+        let state = { state with SweepsFrozen = gp.CumulativeScores |> Map.exists (fun _ s -> s >= 10) }
         let state = GameEngine.dealRound state true
         { gp with
             State = { state with DealRound = 1 }
@@ -603,6 +637,10 @@ type GameplayDispatcher () =
         let st = gameplay.State
         let players = st.Players
         let humanSeatOpt = players |> List.tryFindIndex (fun p -> p.Type = Human)
+        // Fixed viewpoint: in watch mode seat 0 occupies the bottom (its hand
+        // rendered like a human's, minus interaction), and a spectated game
+        // has nothing to hide so every hand is drawn face-up.
+        let shownSeat = humanSeatOpt |> Option.defaultValue 0
         let interactive = gameplay.Phase = WaitingForHuman
         let elapsed = gameplay.PhaseTicks
         let animating = gameplay.Phase = AnimatingPlay
@@ -614,9 +652,17 @@ type GameplayDispatcher () =
             | _ -> None
         let dealing = gameplay.Phase = Dealing
         let shuffling = gameplay.Phase = Shuffling
-        // the first deal lays the table too, so hide the real table cards while
-        // the backs slide in; later deals only top up hands (table stays put)
-        let dealHasTable = dealing && (gameplay.DealSteps |> List.exists (fun s -> s.Target = DealToTable))
+        // Progressive deal reveal: the game state is fully dealt before the
+        // animation plays, so while dealing only the cards whose 2-card batch
+        // has already landed are shown; the rest pop in step by step.
+        let dealtSteps = if dealing then int (gameplay.PhaseTicks / Ticks.dealStep) else 0
+        let dealVisible (target: DealTarget) (fullCount: int) =
+            if not dealing then fullCount
+            else
+                let countFor sub =
+                    sub |> List.filter (fun (s: DealStep) -> s.Target = target) |> List.sumBy (fun s -> s.Count)
+                fullCount - countFor gameplay.DealSteps
+                          + countFor (List.truncate dealtSteps gameplay.DealSteps)
 
         // capture-tint sets for the selected card
         let definiteSet, possibleSet =
@@ -633,8 +679,8 @@ type GameplayDispatcher () =
         // can accumulate many cards, so a single row would run off the edges).
         let scatter = gameplay.Config.Settings.DefaultScatter
         let tableContent =
-            let count = List.length st.Table
-            [ for i, card in List.indexed st.Table ->
+            let count = dealVisible DealToTable (List.length st.Table)
+            [ for i, card in List.indexed (List.truncate count st.Table) ->
                 let bx, by = Ly.tableCardPos scatter count i card
                 let ox, oy = gameplay.TableOffsets |> Map.tryFind card |> Option.defaultValue (0.0f, 0.0f)
                 Content.staticSprite ("TableCard" + string i)
@@ -650,12 +696,10 @@ type GameplayDispatcher () =
         // that the same press can either select (click) or play (drag onto the table).
         // The card currently being dragged is hidden here and drawn at the cursor below.
         let handContent =
-            match humanSeatOpt with
-            | None -> []
-            | Some seat ->
-                let hand = players[seat].Hand
-                let count = List.length hand
-                [ for i, card in List.indexed hand do
+            let seat = shownSeat
+            let hand = players[seat].Hand |> List.truncate (dealVisible (DealToSeat seat) (List.length players[seat].Hand))
+            let count = List.length hand
+            [ for i, card in List.indexed hand do
                     if gameplay.DragIndex <> Some i then
                         let hx, _ = Ly.handPos count i
                         let selected = gameplay.SelectedCardIndex = Some i
@@ -685,14 +729,16 @@ type GameplayDispatcher () =
         // row of card backs at the top for the first opponent, vertical stacks on the
         // left/right for additional opponents (3-4 player games), each with a label.
         let oppContent =
-            let backImg = CardImg.backAsset gameplay.Back
-            let opponents = players |> List.indexed |> List.filter (fun (i, _) -> Some i <> humanSeatOpt)
-            [ for ord, (i, p) in List.indexed opponents do
-                let handN = List.length p.Hand
+            // In a spectated (watch-mode) game the "backs" are drawn face-up.
+            let cardImgFor (p: Player) (j: int) =
+                if humanSeatOpt.IsSome then CardImg.handBackAsset else CardImg.cardAsset p.Hand[j]
+            let opponents = players |> List.indexed |> List.filter (fun (i, _) -> i <> shownSeat)
+            [ for (i, p) in opponents do
+                let handN = dealVisible (DealToSeat i) (List.length p.Hand)
                 let labelCol = if st.CurrentPlayerIndex = i then Clr.gold else Clr.lightGray
                 let summary = $"{p.Name}  —  hand {handN}, won {List.length p.CapturedCards}"
-                match ord with
-                | 0 ->
+                match Ly.seatOf players.Length shownSeat i with
+                | Ly.SeatTop | Ly.SeatBottom ->
                     // top opponent — fanned (slightly overlapping) backs, label beneath
                     let gap = -16.0f
                     let leftX = Ly.centerCardsX handN gap
@@ -701,7 +747,7 @@ type GameplayDispatcher () =
                         yield Content.staticSprite ("OppTopCard" + string j)
                             [Entity.Position := v3 bx Ly.topOppY 0.0f
                              Entity.Size == v3 Ly.cardW Ly.cardH 0.0f
-                             Entity.StaticImage := backImg
+                             Entity.StaticImage := cardImgFor p j
                              Entity.Elevation == (1.0f + float32 j * 0.01f)]
                     yield Content.text "OppTopLabel"
                         [Entity.Position := v3 0.0f (Ly.topOppY - 36.0f) 0.0f
@@ -711,16 +757,17 @@ type GameplayDispatcher () =
                          Entity.TextColor := labelCol
                          Entity.FontSizing == Some 10.0f
                          Entity.Elevation == 2.0f]
-                | side ->
+                | sideSeat ->
                     // side opponents — vertical stack of backs hugging the screen edge
-                    let x = if side = 1 then Ly.sideLeftX else Ly.sideRightX
+                    let side = if sideSeat = Ly.SeatLeft then 1 else 2
+                    let x = if sideSeat = Ly.SeatLeft then Ly.sideLeftX else Ly.sideRightX
                     let step = Ly.cardH / 3.0f
                     let top = float32 (handN - 1) * step / 2.0f
                     for j in 0 .. handN - 1 do
                         yield Content.staticSprite ("OppSideCard" + string side + "_" + string j)
                             [Entity.Position := v3 x (top - float32 j * step) 0.0f
                              Entity.Size == v3 Ly.cardW Ly.cardH 0.0f
-                             Entity.StaticImage := backImg
+                             Entity.StaticImage := cardImgFor p j
                              Entity.Elevation == (1.0f + float32 j * 0.01f)]
                     yield Content.text ("OppSideLabel" + string side)
                         [Entity.Position := v3 x (top + 26.0f) 0.0f
@@ -830,13 +877,13 @@ type GameplayDispatcher () =
         let dealContent =
             if not dealing then []
             else
-                let back = CardImg.backAsset gameplay.Back
+                let deckImg = CardImg.backAsset gameplay.Back
                 let deck =
                     [ for d in 0 .. 2 ->
                         Content.staticSprite ("Deck" + string d)
                             [Entity.Position == v3 0.0f (Ly.tableY + float32 d * 1.5f) 0.0f
                              Entity.Size == v3 Ly.cardW Ly.cardH 0.0f
-                             Entity.StaticImage == back
+                             Entity.StaticImage == deckImg
                              Entity.Elevation == (5.0f + float32 d * 0.005f)] ]
                 let slide =
                     match List.tryItem (int (gameplay.PhaseTicks / Ticks.dealStep)) gameplay.DealSteps with
@@ -847,7 +894,7 @@ type GameplayDispatcher () =
                             Content.staticSprite ("DealC" + string c)
                                 [Entity.Position := v3 ((step.ToX + spread) * e) (Ly.tableY + (step.ToY - Ly.tableY) * e) 0.0f
                                  Entity.Size == v3 Ly.cardW Ly.cardH 0.0f
-                                 Entity.StaticImage == back
+                                 Entity.StaticImage == CardImg.handBackAsset
                                  Entity.Elevation == (5.2f + float32 c * 0.01f)] ]
                     | None -> []
                 deck @ slide
@@ -856,7 +903,7 @@ type GameplayDispatcher () =
         let shuffleContent =
             if not shuffling then []
             else
-                let back = CardImg.backAsset gameplay.Back
+                let back = CardImg.handBackAsset
                 let t = Ticks.eased gameplay.PhaseTicks Ticks.shuffle
                 let sep = 55.0f * (1.0f - t)
                 let wiggle = float32 (gameplay.PhaseTicks % 8L) - 4.0f
@@ -884,8 +931,9 @@ type GameplayDispatcher () =
                      Entity.Elevation == -1.0f]
 
                 yield! oppContent
-                if not shuffling && not (dealing && dealHasTable) then yield! tableContent
-                if not shuffling && not dealing then yield! handContent
+                // table and hand truncate themselves to the dealt-so-far counts
+                if not shuffling then yield! tableContent
+                if not shuffling then yield! handContent
                 yield! dragContent
                 yield! animContent
                 yield! dealContent

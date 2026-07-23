@@ -53,7 +53,11 @@ module GameEngine =
           DealRound: int
           TotalDeals: int
           LastCapturer: int option
-          Variant: GameVariant }
+          Variant: GameVariant
+          /// 10-point freeze: once any player's cumulative game score has
+          /// reached 10, sweeps score nothing for the rest of the game.
+          /// Set per round by the caller from the cumulative scores.
+          SweepsFrozen: bool }
 
     /// Result of a single turn
     type TurnResult =
@@ -145,6 +149,13 @@ module GameEngine =
         (state: GameState) (idx: int) (playedCard: Card)
         (remainingHand: Card list) (result: PlayResult) (newTable: Card list)
         (eval: AI.PlayEvaluation) : TurnResult =
+        // 10-point freeze: with sweeps disabled, strip the sweep flag so the
+        // pile count, the UI's "SWEEP!" banner, and the eval all agree.
+        let result =
+            match result with
+            | Capture(hc, captured, true) when state.SweepsFrozen -> Capture(hc, captured, false)
+            | r -> r
+        let eval = if state.SweepsFrozen && eval.IsSweep then { eval with AI.IsSweep = false } else eval
         let player = state.Players[idx]
         let updatedPlayer =
             match result with
@@ -267,6 +278,7 @@ module GameEngine =
         { Players = freshPlayers
           Table = []
           Deck = deck
+          SweepsFrozen = false
           CurrentPlayerIndex = startIdx
           DealRound = 0
           TotalDeals = SeatCount.dealRounds config.Seats
