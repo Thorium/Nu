@@ -45,6 +45,7 @@ type MenuMessage =
     | ToggleScatter
     | ToggleChat
     | TogglePersonalities
+    | ToggleStrict
     | KeyInput of KeyboardKey
     | Nil
     interface Message
@@ -93,6 +94,7 @@ type MenuDispatcher () =
         | ToggleScatter -> just { menu with Settings = { menu.Settings with DefaultScatter = not menu.Settings.DefaultScatter } }
         | ToggleChat -> just { menu with Settings = { menu.Settings with ChatEnabled = not menu.Settings.ChatEnabled } }
         | TogglePersonalities -> just { menu with Settings = { menu.Settings with AiPersonalities = not menu.Settings.AiPersonalities } }
+        | ToggleStrict -> just { menu with Settings = { menu.Settings with StrictRules = not menu.Settings.StrictRules } }
         // Esc closes the options overlay if open, otherwise quits the application
         | KeyInput KeyboardKey.Escape -> if menu.ShowingOptions then just { menu with ShowingOptions = false } else withSignal ExitGame menu
         | KeyInput _ | Nil -> just menu
@@ -173,6 +175,7 @@ type MenuDispatcher () =
               optBtn "OptScatter" $"Table layout:  {scatterLabel}" 42.0f ToggleScatter
               optBtn "OptChat" $"AI table-talk:  {onOff menu.Settings.ChatEnabled}" 4.0f ToggleChat
               optBtn "OptPers" $"AI personalities:  {onOff menu.Settings.AiPersonalities}" -34.0f TogglePersonalities
+              optBtn "OptStrict" $"Strict rules (no capture cancel):  {onOff menu.Settings.StrictRules}" -72.0f ToggleStrict
               // NB: elevation 7 so it draws ABOVE the modal overlay sprite (elevation 6);
               // the generic `btn` helper uses elevation 1, which left it behind the dark dim.
               Content.button "OptBack"

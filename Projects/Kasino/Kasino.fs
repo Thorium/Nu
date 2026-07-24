@@ -120,6 +120,9 @@ module AppState =
     let mutable cumulativeScores : Map<string, int> = Map.empty
     /// Undistributed most-cards/most-spades pot from earlier tied rounds.
     let mutable carryOver = Scoring.CarryOver.zero
+    /// Per-game random dealer shift: the first round's starter (the player
+    /// next to the dealer) is drawn at game start instead of always seat 0.
+    let mutable dealerOffset = 0
     let mutable rng = Random()
     let mutable lastEval : AI.PlayEvaluation option = None
 
@@ -184,7 +187,11 @@ module AppState =
         cumulativeScores <- players |> List.map (fun p -> p.Name, 0) |> Map.ofList
         roundNumber <- 1
         carryOver <- Scoring.CarryOver.zero
+        dealerOffset <- rng.Next(List.length players)
         let state = GameEngine.newRound config rng players 1
+        // The dealer is randomized per game: dealerOffset shifts the engine's
+        // round-by-round starter rotation by a per-game random amount.
+        let state = { state with CurrentPlayerIndex = (state.CurrentPlayerIndex + dealerOffset) % List.length players }
         let state = GameEngine.dealRound state true
         gameState <- Some { state with DealRound = 1 }
         phase <- Shuffling
@@ -212,6 +219,7 @@ module AppState =
             let state = GameEngine.newRound config rng players roundNumber
             // 10-point freeze: sweeps stop scoring once anyone has 10+ points.
             let state = { state with SweepsFrozen = cumulativeScores |> Map.exists (fun _ s -> s >= 10) }
+            let state = { state with CurrentPlayerIndex = (state.CurrentPlayerIndex + dealerOffset) % List.length players }
             let state = GameEngine.dealRound state true
             gameState <- Some { state with DealRound = 1 }
             phase <- Shuffling
@@ -374,6 +382,8 @@ module Clr =
     let btnGreen = color 0.157f 0.392f 0.157f 1.0f
     let btnBlue = color 0.157f 0.314f 0.471f 1.0f
     let btnRed = color 0.471f 0.157f 0.157f 1.0f
+    let cardRed = color 1.0f 0.53f 0.49f 1.0f              // red-suit tint for card names in text
+    let cardGray = color 0.745f 0.745f 0.745f 1.0f         // black-suit tint for card names in text
     let btnPurple = color 0.314f 0.235f 0.471f 1.0f
     let btnDark = color 0.235f 0.314f 0.235f 1.0f
     let modalOverlay = color 0.0f 0.0f 0.0f 0.627f
@@ -522,6 +532,25 @@ module Helpers =
                         AppState.phase <- ComputerThinking
                         AppState.phaseTimer <- 0.0f
 
+    /// Display order for the strict grid: cards arranged by table value
+    /// (aces first, kings last), suits keeping ties stable. The game state's
+    /// own order is untouched — this is presentation only.
+    let gridOrder (table: Card list) =
+        table |> List.sortBy (fun c -> Cards.tableValue c.Rank, c.Suit)
+
+    /// Balanced grid geometry: up to 7 cards in one row, more split into
+    /// balanced rows (9 = 5+4), each row individually centered. Returns the
+    /// center position of display index idx among count cards.
+    let gridPos (count: int) (idx: int) =
+        let rows = if count <= 7 then 1 else (count + 6) / 7
+        let cols = (count + rows - 1) / rows
+        let row = idx / cols
+        let col = idx % cols
+        let rowCount = min cols (count - row * cols)   // last row may be short
+        let x = Ly.centerCardsX rowCount Ly.tableGap + float32 col * (Ly.cardW + Ly.tableGap) + Ly.cardW / 2.0f
+        let y = Ly.tableY + float32 (rows - 1 - row * 2) * (Ly.cardH + Ly.tableGap) / 2.0f
+        (x, y)
+
     /// Build a collect animation from a play result.
     /// Captured cards slide from their table positions toward the player's area.
     let buildCollectAnimation (playResult: PlayResult) (seat: Ly.Seat) (table: Card list) =
@@ -538,14 +567,9 @@ module Helpers =
                     match Map.tryFind card AppState.scatteredPositions with
                     | Some(sx, sy, _) -> (card, sx, sy)
                     | None ->
-                        // Fallback: grid position
-                        let tableCols = min (List.length table) 10
-                        let idx = table |> List.tryFindIndex ((=) card) |> Option.defaultValue 0
-                        let col = idx % tableCols
-                        let row = idx / tableCols
-                        let tableRows = (List.length table + tableCols - 1) / tableCols
-                        let x = Ly.centerCardsX tableCols Ly.tableGap + float32 col * (Ly.cardW + Ly.tableGap) + Ly.cardW / 2.0f
-                        let y = Ly.tableY + float32 (tableRows - 1 - row * 2) * (Ly.cardH + Ly.tableGap) / 2.0f
+                        // Fallback: grid position (value-sorted display order)
+                        let idx = gridOrder table |> List.tryFindIndex ((=) card) |> Option.defaultValue 0
+                        let x, y = gridPos (List.length table) idx
                         (card, x, y))
             Some { CollectCards = cards; CollectToX = destX; CollectToY = destY
                    CollectStart = AppState.cardSlideDuration; CollectDuration = AppState.collectSlideDuration }
@@ -565,11 +589,13 @@ module Helpers =
             | Ly.SeatLeft -> (Ly.sideLeftX, 0.0f)
             | Ly.SeatRight -> (Ly.sideRightX, 0.0f)
 
-        // Deal like at a real table: two passes of 2 cards to each player, and
-        // on the first deal each pass ends with 2 cards to the table — so the
-        // table receives its 4 starting cards 2 at a time, after the players.
+        // Deal like at a real table: two passes of 2 cards to each player —
+        // starting with the player next to the dealer (the wave's first to
+        // act, CurrentPlayerIndex) and proceeding clockwise, dealer last —
+        // and on the first deal each pass ends with 2 cards to the table.
         [for _ in 1 .. 2 do
-            for pIdx in 0 .. playerCount - 1 do
+            for k in 0 .. playerCount - 1 do
+                let pIdx = (gs.CurrentPlayerIndex + k) % playerCount
                 let (px, py) = playerDest pIdx
                 { DealTargetLabel = gs.Players[pIdx].Name; DealCardCount = 2
                   DealToX = px; DealToY = py; DealIsFaceUp = (pIdx = bottomIdx) }
@@ -863,8 +889,10 @@ module RulesContent =
                "  2 of Spades ............ 1 point"
                "  Each Sweep ............. 1 point"
                ""
-               "TIE: Nobody scores tied categories."
+               "TIE: Tied most-cards/spades points carry over as a"
+               "  pot to the next outright winner of the category."
                "SWEEPS: Minimum sweep count subtracted from all."
+               "  Once anyone has 10+ points, sweeps score nothing."
                "TARGET: First to 16 cumulative points wins." |])
            vp "Scoring Cards" scoringVisual
            TextPage ("Laistokasino",
@@ -1089,6 +1117,14 @@ type KasinoDispatcher () =
              Entity.Elevation .= 1.0f] world then
             AppState.menuSettings <- { AppState.menuSettings with ChatEnabled = not AppState.menuSettings.ChatEnabled }
 
+        if World.doButton "BtnToggleStrict"
+            [Entity.Position .= v3 0.0f (Ly.menuBaseY - 4.0f * Ly.btnGap) 0.0f
+             Entity.Size .= v3 Ly.btnW Ly.btnH 0.0f
+             Entity.Text @= (if AppState.menuSettings.StrictRules then "Strict Rules: ON" else "Strict Rules: OFF")
+             Entity.Visible @= isHumanCount
+             Entity.Elevation .= 1.0f] world then
+            AppState.menuSettings <- { AppState.menuSettings with StrictRules = not AppState.menuSettings.StrictRules }
+
         // "How to Play" button on all menu steps
         if World.doButton "BtnRules"
             [Entity.Position .= v3 0.0f -160.0f 0.0f
@@ -1162,6 +1198,8 @@ type KasinoDispatcher () =
         // ── Draw table cards ──────────────────────────────────
         let tableCount = dealVisible "table" (List.length gs.Table)
         let definiteSet, possibleSet =
+            // Strict rules: capture candidates are not pre-highlighted.
+            if AppState.config.Settings.StrictRules then Set.empty, Set.empty else
             match AppState.capturePreview with
             | NoCapture -> Set.empty, Set.empty
             | SingleCapture cards -> Set.ofList cards, Set.empty
@@ -1174,12 +1212,12 @@ type KasinoDispatcher () =
                 AppState.scatteredPositions <- Helpers.computeScatteredPositions gs.Table AppState.scatteredPositions
             | StrictGrid -> ()
 
-        // Grid layout computation
-        let tableCols = min tableCount 10
-        let tableRows = if tableCount > 0 then (tableCount + tableCols - 1) / tableCols else 0
-        let tableStartX =
-            if tableCols > 0 then Ly.centerCardsX tableCols Ly.tableGap
-            else 0.0f
+        // Grid mode arranges cards by value; scatter positions are per-card.
+        let displayTable =
+            let visible = gs.Table |> List.truncate tableCount
+            match AppState.tableLayout with
+            | StrictGrid -> Helpers.gridOrder visible
+            | RandomScatter -> visible
 
         // During AnimatingPlay, hide the card being animated from the table to prevent flicker
         let animatingCard =
@@ -1190,27 +1228,21 @@ type KasinoDispatcher () =
         for i in 0 .. Ly.maxTable - 1 do
             let name = $"TC{i}"
             if i < tableCount then
-                let card = gs.Table[i]
+                let card = displayTable[i]
                 // Hide the card being animated (Place action flicker fix)
                 let isAnimating = animatingCard = Some card
 
                 let cx, cy, rot =
                     match AppState.tableLayout with
                     | StrictGrid ->
-                        let col = i % tableCols
-                        let row = i / tableCols
-                        let x = tableStartX + float32 col * (Ly.cardW + Ly.tableGap) + Ly.cardW / 2.0f
-                        let y = Ly.tableY + float32 (tableRows - 1 - row * 2) * (Ly.cardH + Ly.tableGap) / 2.0f
+                        let x, y = Helpers.gridPos tableCount i
                         (x, y, 0.0f)
                     | RandomScatter ->
                         match Map.tryFind card AppState.scatteredPositions with
                         | Some (sx, sy, sr) -> (sx, sy, sr)
                         | None ->
                             // Fallback to grid
-                            let col = i % tableCols
-                            let row = i / tableCols
-                            let x = tableStartX + float32 col * (Ly.cardW + Ly.tableGap) + Ly.cardW / 2.0f
-                            let y = Ly.tableY + float32 (tableRows - 1 - row * 2) * (Ly.cardH + Ly.tableGap) / 2.0f
+                            let x, y = Helpers.gridPos tableCount i
                             (x, y, 0.0f)
 
                 let rotation = Quaternion.CreateFromAxisAngle(Vector3.UnitZ, rot)
@@ -1719,7 +1751,10 @@ type KasinoDispatcher () =
             if btnPlayVisible then
                 match AppState.capturePreview with
                 | NoCapture -> "Place on Table"
-                | SingleCapture cards -> $"Capture {cards.Length} Cards"
+                | SingleCapture cards ->
+                    // Strict rules hide how many cards the capture would take.
+                    if AppState.config.Settings.StrictRules then "Capture Cards"
+                    else $"Capture {cards.Length} Cards"
                 | MultipleCaptures _ -> "Play (Choose)"
             else ""
         if World.doButton "BtnPlay"
@@ -1793,15 +1828,14 @@ type KasinoDispatcher () =
         for i in 0 .. optionsPerPage - 1 do
             let name = $"BtnOpt{i}"
             let optIdx = capturePageStart + i
-            if isModal && optIdx < AppState.captureOptions.Length then
+            let optVisible = isModal && optIdx < AppState.captureOptions.Length
+            let y = 120.0f - float32 i * 34.0f
+            if optVisible then
                 let opt = AppState.captureOptions[optIdx]
-                let capturedStr = opt.Captured |> List.map Cards.display |> String.concat " "
-                let label = $"{i + 1}: {capturedStr} ({opt.Captured.Length})"
-                let y = 120.0f - float32 i * 34.0f
                 if World.doButton name
                     [Entity.Position .= v3 0.0f y 0.0f
                      Entity.Size .= v3 340.0f 28.0f 0.0f
-                     Entity.Text @= label
+                     Entity.Text @= ""
                      Entity.Visible @= true
                      Entity.Elevation .= 7.0f] world then
                     Helpers.processCapture AppState.captureCardIdx opt
@@ -1809,6 +1843,45 @@ type KasinoDispatcher () =
                 World.doButton name
                     [Entity.Visible @= false
                      Entity.Elevation .= 7.0f] world |> ignore
+            // Overlay label in fixed slots: white prefix/count, each card name
+            // tinted by suit (red suits reddish, black suits gray) so the
+            // options read at a glance. Nu has no text measuring, hence slots.
+            let captured = if optVisible then AppState.captureOptions[optIdx].Captured else []
+            World.doText $"OptPre{i}"
+                [Entity.Position .= v3 -150.0f y 0.0f
+                 Entity.Size .= v3 40.0f 24.0f 0.0f
+                 Entity.Text @= (if optVisible then $"{i + 1}:" else "")
+                 Entity.Justification .= Justified (JustifyLeft, JustifyMiddle)
+                 Entity.TextColor .= Clr.white
+                 Entity.FontSizing .= Some 13.0f
+                 Entity.Visible @= optVisible
+                 Entity.Elevation .= 7.5f] world
+            for j in 0 .. 5 do
+                let cardTxt, cardCol =
+                    if optVisible && j < captured.Length then
+                        if j = 5 && captured.Length > 6 then ("…", Clr.white)
+                        else
+                            let c = captured[j]
+                            (Cards.display c, (match c.Suit with Hearts | Diamonds -> Clr.cardRed | _ -> Clr.cardGray))
+                    else ("", Clr.white)
+                World.doText $"OptCard{i}_{j}"
+                    [Entity.Position .= v3 (-109.0f + float32 j * 38.0f) y 0.0f
+                     Entity.Size .= v3 38.0f 24.0f 0.0f
+                     Entity.Text @= cardTxt
+                     Entity.Justification .= Justified (JustifyCenter, JustifyMiddle)
+                     Entity.TextColor @= cardCol
+                     Entity.FontSizing .= Some 13.0f
+                     Entity.Visible @= (cardTxt <> "")
+                     Entity.Elevation .= 7.5f] world
+            World.doText $"OptCount{i}"
+                [Entity.Position .= v3 140.0f y 0.0f
+                 Entity.Size .= v3 60.0f 24.0f 0.0f
+                 Entity.Text @= (if optVisible then $"({captured.Length})" else "")
+                 Entity.Justification .= Justified (JustifyRight, JustifyMiddle)
+                 Entity.TextColor .= Clr.white
+                 Entity.FontSizing .= Some 13.0f
+                 Entity.Visible @= optVisible
+                 Entity.Elevation .= 7.5f] world
 
         let moreVisible = isModal && capturePageCount > 1
         if World.doButton "BtnOptMore"
@@ -1831,13 +1904,15 @@ type KasinoDispatcher () =
             if placeOptVisible then
                 Helpers.processHumanPlace AppState.captureCardIdx
 
+        // Strict rules: the touched card must be played — no cancelling out.
+        let cancelVisible = isModal && not AppState.config.Settings.StrictRules
         if World.doButton "BtnCancel"
             [Entity.Position .= v3 0.0f -158.0f 0.0f
              Entity.Size .= v3 140.0f 28.0f 0.0f
              Entity.Text .= "Cancel"
-             Entity.Visible @= isModal
+             Entity.Visible @= cancelVisible
              Entity.Elevation .= 7.0f] world then
-            if isModal then
+            if cancelVisible then
                 AppState.phase <- WaitingForHuman
                 AppState.selectedCardIndex <- None
                 AppState.capturePreview <- NoCapture

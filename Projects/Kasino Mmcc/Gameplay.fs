@@ -76,6 +76,7 @@ type Gameplay =
       LastEval: AI.PlayEvaluation option
       ScoreBreakdowns: (Player * Scoring.ScoreBreakdown) list
       Carry: Scoring.CarryOver             // undistributed most-cards/most-spades pot from tied rounds
+      DealerOffset: int                    // per-game random dealer shift (starter = engine rotation + offset)
       PlayAnim: CardAnim option            // card sliding hand → table
       CollectAnim: CollectAnim option      // captured cards sliding table → player
       DealSteps: DealStep list             // current deal's slide sequence
@@ -115,6 +116,7 @@ type Gameplay =
           LastEval = None
           ScoreBreakdowns = []
           Carry = Scoring.CarryOver.zero
+          DealerOffset = 0
           PlayAnim = None
           CollectAnim = None
           DealSteps = []
@@ -130,7 +132,11 @@ type Gameplay =
             if config.Settings.RandomCardBacks then $"back{rng.Next 3 + 1}"
             else "back1"
         let players = GameEngine.createPlayers config
+        // The dealer is randomized per game: the offset shifts the engine's
+        // round-by-round starter rotation by a per-game random amount.
+        let dealerOffset = rng.Next(List.length players)
         let state = GameEngine.newRound config rng players 1
+        let state = { state with CurrentPlayerIndex = (state.CurrentPlayerIndex + dealerOffset) % List.length players }
         let state = GameEngine.dealRound state true
         { Gameplay.empty with
             Active = true
@@ -140,6 +146,7 @@ type Gameplay =
             RoundNumber = 1
             CumulativeScores = players |> List.map (fun p -> p.Name, 0) |> Map.ofList
             Back = back
+            DealerOffset = dealerOffset
             LastPlayMessage = "Round 1 - Deal 1" }
 
 // ─── Messages (pure model transitions) and Commands (side-effects) ────
@@ -279,11 +286,13 @@ module GameplayLogic =
             | Ly.SeatTop -> (0.0f, Ly.topOppY)
             | Ly.SeatLeft -> (Ly.sideLeftX, 0.0f)
             | Ly.SeatRight -> (Ly.sideRightX, 0.0f)
-        // Deal like at a real table: two passes of 2 cards to each player, and
-        // on the first deal each pass ends with 2 cards to the table — so the
-        // table receives its 4 starting cards 2 at a time, after the players.
+        // Deal like at a real table: two passes of 2 cards to each player —
+        // starting with the player next to the dealer (the wave's first to
+        // act, CurrentPlayerIndex) and proceeding clockwise, dealer last —
+        // and on the first deal each pass ends with 2 cards to the table.
         [ for _ in 1 .. 2 do
-            for seat in 0 .. state.Players.Length - 1 do
+            for k in 0 .. state.Players.Length - 1 do
+                let seat = (state.CurrentPlayerIndex + k) % state.Players.Length
                 let (dx, dy) = seatDest seat
                 { Target = DealToSeat seat; Count = 2; ToX = dx; ToY = dy }
             if isFirst then
@@ -341,8 +350,7 @@ module GameplayLogic =
         let playAnim, collectAnim =
             match tr.PlayResult with
             | Place placed ->
-                let toIdx = tr.NewState.Table |> List.tryFindIndex ((=) placed) |> Option.defaultValue 0
-                let toX, toY = Ly.tableCardPos scatter (List.length tr.NewState.Table) toIdx placed
+                let toX, toY = Ly.tableCardPosFor scatter tr.NewState.Table placed
                 Some { Card = playedCard; FromX = fromX; FromY = fromY; ToX = toX; ToY = toY }, None
             | Capture (_, captured, _) ->
                 let play = Some { Card = playedCard; FromX = fromX; FromY = fromY; ToX = 0.0f; ToY = Ly.tableY }
@@ -354,8 +362,7 @@ module GameplayLogic =
                     | Ly.SeatRight  -> Ly.sideRightX + 40.0f, 0.0f
                 let cards =
                     captured |> List.map (fun c ->
-                        let idx = preTable |> List.tryFindIndex ((=) c) |> Option.defaultValue 0
-                        let cx, cy = Ly.tableCardPos scatter (List.length preTable) idx c
+                        let cx, cy = Ly.tableCardPosFor scatter preTable c
                         // honour any manual nudge so the card slides from where it sat
                         let ox, oy = gp.TableOffsets |> Map.tryFind c |> Option.defaultValue (0.0f, 0.0f)
                         (c, cx + ox, cy + oy))
@@ -380,6 +387,7 @@ module GameplayLogic =
         let state = GameEngine.newRound gp.Config rng gp.State.Players roundNo
         // 10-point freeze: sweeps stop scoring once anyone has 10+ points.
         let state = { state with SweepsFrozen = gp.CumulativeScores |> Map.exists (fun _ s -> s >= 10) }
+        let state = { state with CurrentPlayerIndex = (state.CurrentPlayerIndex + gp.DealerOffset) % List.length state.Players }
         let state = GameEngine.dealRound state true
         { gp with
             State = { state with DealRound = 1 }
@@ -439,12 +447,11 @@ type GameplayDispatcher () =
             if not tableStatic then None
             else
                 let scatter = gameplay.Config.Settings.DefaultScatter
-                let count = List.length gameplay.State.Table
                 gameplay.State.Table
                 |> List.indexed
                 |> List.rev   // last drawn is on top
-                |> List.tryPick (fun (i, card) ->
-                    let bx, by = Ly.tableCardPos scatter count i card
+                |> List.tryPick (fun (_, card) ->
+                    let bx, by = Ly.tableCardPosFor scatter gameplay.State.Table card
                     let ox, oy = gameplay.TableOffsets |> Map.tryFind card |> Option.defaultValue (0.0f, 0.0f)
                     if abs (p.X - (bx + ox)) <= Ly.cardW / 2.0f && abs (p.Y - (by + oy)) <= Ly.cardH / 2.0f
                     then Some card else None)
@@ -548,7 +555,8 @@ type GameplayDispatcher () =
             | _ -> just gameplay
 
         | CancelCapture ->
-            if gameplay.Phase = ChoosingCaptureOption then
+            // Strict rules: the touched card must be played — no cancelling out.
+            if gameplay.Phase = ChoosingCaptureOption && not gameplay.Config.Settings.StrictRules then
                 just { gameplay with Phase = WaitingForHuman; PhaseTicks = 0L
                                      SelectedCardIndex = None; CapturePreview = NoCapture
                                      CaptureOptions = []; CapturePage = 0 }
@@ -593,9 +601,7 @@ type GameplayDispatcher () =
                 // nudge the table card by the pointer delta, clamped to the table space
                 let lx, ly = gameplay.DragPos
                 let scatter = gameplay.Config.Settings.DefaultScatter
-                let count = List.length gameplay.State.Table
-                let idx = gameplay.State.Table |> List.tryFindIndex ((=) card) |> Option.defaultValue 0
-                let bx, by = Ly.tableCardPos scatter count idx card
+                let bx, by = Ly.tableCardPosFor scatter gameplay.State.Table card
                 let ox, oy = gameplay.TableOffsets |> Map.tryFind card |> Option.defaultValue (0.0f, 0.0f)
                 let cx, cy = clampToTable (bx + ox + (p.X - lx)) (by + oy + (p.Y - ly))
                 just { gameplay with DragPos = (p.X, p.Y); TableOffsets = Map.add card (cx - bx, cy - by) gameplay.TableOffsets }
@@ -666,6 +672,8 @@ type GameplayDispatcher () =
 
         // capture-tint sets for the selected card
         let definiteSet, possibleSet =
+            // Strict rules: capture candidates are not pre-highlighted.
+            if gameplay.Config.Settings.StrictRules then Set.empty, Set.empty else
             match gameplay.CapturePreview with
             | NoCapture -> Set.empty, Set.empty
             | SingleCapture d -> Set.ofList d, Set.empty
@@ -680,8 +688,9 @@ type GameplayDispatcher () =
         let scatter = gameplay.Config.Settings.DefaultScatter
         let tableContent =
             let count = dealVisible DealToTable (List.length st.Table)
-            [ for i, card in List.indexed (List.truncate count st.Table) ->
-                let bx, by = Ly.tableCardPos scatter count i card
+            let visible = List.truncate count st.Table
+            [ for i, card in List.indexed visible ->
+                let bx, by = Ly.tableCardPosFor scatter visible card
                 let ox, oy = gameplay.TableOffsets |> Map.tryFind card |> Option.defaultValue (0.0f, 0.0f)
                 Content.staticSprite ("TableCard" + string i)
                     [Entity.Position := v3 (bx + ox) (by + oy) 0.0f
@@ -810,16 +819,48 @@ type GameplayDispatcher () =
                      Entity.FontSizing == Some 14.0f
                      Entity.Elevation == 7.0f]
                   for row, (i, opt) in List.indexed visible do
-                    let label =
-                        opt.Captured
-                        |> List.map Cards.display
-                        |> String.concat ", "
+                    // Button carries no label of its own; the overlay texts
+                    // below tint each card name by suit (red suits reddish,
+                    // black suits gray) in fixed slots — Nu has no text
+                    // measuring, hence the tabular layout.
+                    let y = 56.0f - float32 row * 34.0f
                     Content.button ("CaptureOpt" + string i)
-                        [Entity.Position := v3 0.0f (56.0f - float32 row * 34.0f) 0.0f
+                        [Entity.Position := v3 0.0f y 0.0f
                          Entity.Size == v3 420.0f 28.0f 0.0f
-                         Entity.Text := $"{i + 1})  {label}"
+                         Entity.Text == ""
                          Entity.Elevation == 7.0f
                          Entity.ClickEvent => ChooseCapture i]
+                    Content.text ("CaptureOptPre" + string i)
+                        [Entity.Position := v3 -180.0f y 0.0f
+                         Entity.Size == v3 40.0f 24.0f 0.0f
+                         Entity.Text := $"{i + 1})"
+                         Entity.Justification == Justified (JustifyLeft, JustifyMiddle)
+                         Entity.TextColor == Clr.white
+                         Entity.FontSizing == Some 12.0f
+                         Entity.Elevation == 7.5f]
+                    for j, c in List.indexed (List.truncate 7 opt.Captured) do
+                        let txt =
+                            if j = 6 && opt.Captured.Length > 7 then "…"
+                            else Cards.display c
+                        let col =
+                            if txt = "…" then Clr.white
+                            else match c.Suit with Hearts | Diamonds -> Clr.cardRed | _ -> Clr.cardGray
+                        Content.text ("CaptureOptCard" + string i + "_" + string j)
+                            [Entity.Position := v3 (-134.0f + float32 j * 44.0f) y 0.0f
+                             Entity.Size == v3 44.0f 24.0f 0.0f
+                             Entity.Text := txt
+                             Entity.Justification == Justified (JustifyCenter, JustifyMiddle)
+                             Entity.TextColor := col
+                             Entity.FontSizing == Some 12.0f
+                             Entity.Elevation == 7.5f]
+                    Content.text ("CaptureOptCount" + string i)
+                        [Entity.Position := v3 178.0f y 0.0f
+                         Entity.Size == v3 60.0f 24.0f 0.0f
+                         Entity.Text := $"({opt.Captured.Length})"
+                         Entity.Justification == Justified (JustifyRight, JustifyMiddle)
+                         Entity.TextColor == Clr.white
+                         Entity.FontSizing == Some 12.0f
+                         Entity.Elevation == 7.5f]
                   if pageCount > 1 then
                     Content.button "CaptureMore"
                         [Entity.Position == v3 0.0f -114.0f 0.0f
@@ -834,12 +875,14 @@ type GameplayDispatcher () =
                          Entity.Text == "Place instead"
                          Entity.Elevation == 7.0f
                          Entity.ClickEvent => PlaceSelectedCard]
-                  Content.button "CaptureCancel"
-                    [Entity.Position == v3 120.0f -148.0f 0.0f
-                     Entity.Size == v3 130.0f 28.0f 0.0f
-                     Entity.Text == "Cancel"
-                     Entity.Elevation == 7.0f
-                     Entity.ClickEvent => CancelCapture] ]
+                  // Strict rules: the touched card must be played — no Cancel.
+                  if not gameplay.Config.Settings.StrictRules then
+                    Content.button "CaptureCancel"
+                        [Entity.Position == v3 120.0f -148.0f 0.0f
+                         Entity.Size == v3 130.0f 28.0f 0.0f
+                         Entity.Text == "Cancel"
+                         Entity.Elevation == 7.0f
+                         Entity.ClickEvent => CancelCapture] ]
 
         // (round-over / game-over now route to the dedicated Scores screen via
         // ShowScoresCmd — see the AnimatingPlay → enterTurn transition above)

@@ -129,10 +129,15 @@ module private Pages =
               "  Each Sweep ............. 1 point"
               ""
               "TIE RULES: If two or more players tie for most cards"
-              "or most spades, NOBODY scores that category."
+              "or most spades, nobody scores it that round. The points"
+              "carry over as a pot: whoever later wins the category"
+              "outright collects the pot plus that round's points."
               ""
               "SWEEP ADJUSTMENT: The minimum sweep count among all"
               "players is subtracted from everyone's sweep total."
+              ""
+              "SWEEP FREEZE: Once any player has 10 or more total"
+              "points, sweeps score nothing for the rest of the game."
               ""
               "TARGET: First player to reach 16 cumulative points wins." ])
            VisualPage ("Scoring Cards", 4)

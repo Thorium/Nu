@@ -15,15 +15,21 @@ module Settings =
         { RandomCardBacks: bool   // pick a random scenic card back per game
           DefaultScatter: bool    // start games in Random Scatter (vs Strict Grid)
           ChatEnabled: bool       // AI table-talk / banter
-          AiPersonalities: bool } // named opponents with distinct play styles
+          AiPersonalities: bool   // named opponents with distinct play styles
+          /// Harder table etiquette: the capture dialog cannot be cancelled
+          /// (the touched card must be played), the play button doesn't reveal
+          /// how many cards a capture takes, and capture candidates are not
+          /// pre-highlighted on the table.
+          StrictRules: bool }
 
     /// Defaults: the look that shipped (random backs + scatter) stays on; the
-    /// two new gameplay-flavour features are off so nothing changes unasked.
+    /// gameplay-flavour features are off so nothing changes unasked.
     let defaultSettings =
         { RandomCardBacks = true
           DefaultScatter = true
           ChatEnabled = false
-          AiPersonalities = false }
+          AiPersonalities = false
+          StrictRules = false }
 
 /// Named AI opponents with a play style. Used only when AiPersonalities is on;
 /// otherwise computer players are plainly named "CPU"/"CPU 1"…

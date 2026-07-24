@@ -95,19 +95,19 @@ module Ly =
         let totalW = float32 count * (cardW + gap) - gap
         -totalW / 2.0f
 
-    /// Cards per table row (10 * 48px ≈ 480 ≤ tableW).
-    let tablePerRow = 10
     let private tableRowGap = 5.0f
 
-    /// Center position of the i-th of `count` table cards (wrapped rows, centered
-    /// on tableY). Shared by the board renderer and the capture/collect animation
-    /// so a captured card animates from exactly where it sat.
+    /// Center position of the i-th of `count` table cards. Up to 7 cards sit
+    /// in one row; more split into balanced rows (9 = 5+4), each row centered
+    /// on tableY. Shared by the board renderer and the capture/collect
+    /// animation so a captured card animates from exactly where it sat.
     let tablePos (count: int) (i: int) : single * single =
-        let rows = max 1 ((count + tablePerRow - 1) / tablePerRow)
+        let rows = if count <= 7 then 1 else (count + 6) / 7
+        let cols = (count + rows - 1) / rows
         let rowPitch = cardH + tableRowGap
-        let row = i / tablePerRow
-        let col = i % tablePerRow
-        let cardsInRow = min tablePerRow (count - row * tablePerRow)
+        let row = i / cols
+        let col = i % cols
+        let cardsInRow = min cols (count - row * cols)
         let leftX = centerCardsX cardsInRow tableGap
         let cx = leftX + cardW / 2.0f + float32 col * (cardW + tableGap)
         let cy = tableY + (float32 (rows - 1) / 2.0f - float32 row) * rowPitch
@@ -129,10 +129,24 @@ module Ly =
         let maxY = tableH / 2.0f - cardH / 2.0f - 6.0f
         (rx * maxX, tableY + ry * maxY)
 
+    /// Display order for the wrapped-rows table: cards arranged by table value
+    /// (aces first, kings last), suits keeping ties stable. Presentation only —
+    /// the game state's own order is untouched.
+    let gridOrder (table: Card list) =
+        table |> List.sortBy (fun c -> Cards.tableValue c.Rank, c.Suit)
+
     /// Table position honouring the layout option: scattered (per-card) or wrapped
     /// rows (by index). Shared by the board renderer and the play/collect anims.
     let tableCardPos (scatter: bool) (count: int) (i: int) (card: Card) : single * single =
         if scatter then scatterPos card else tablePos count i
+
+    /// Table position of a specific card within the given (visible) table:
+    /// scattered per-card, or its slot in the value-sorted wrapped rows.
+    let tableCardPosFor (scatter: bool) (table: Card list) (card: Card) : single * single =
+        if scatter then scatterPos card
+        else
+            let idx = gridOrder table |> List.tryFindIndex ((=) card) |> Option.defaultValue 0
+            tablePos (List.length table) idx
 
 // ─── Colours ──────────────────────────────────────────────────────────
 [<RequireQualifiedAccess>]
@@ -151,3 +165,5 @@ module Clr =
     let lightGreen = color 0.565f 0.933f 0.565f 1.0f
     let darkGray = color 0.412f 0.412f 0.412f 1.0f
     let modalOverlay = color 0.0f 0.0f 0.0f 0.627f
+    let cardRed = color 1.0f 0.53f 0.49f 1.0f      // red-suit tint for card names in text
+    let cardGray = color 0.745f 0.745f 0.745f 1.0f // black-suit tint for card names in text
