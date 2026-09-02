@@ -30,8 +30,10 @@ module AI =
     /// the others only re-rank how captures are chosen (see chooseBestStyled).
     type PlayStyle =
         | Balanced
-        | Aggressive   // grabs as many cards/spades as possible
-        | Cautious     // secures direct points, holds cards back
+        /// grabs as many cards/spades as possible
+        | Aggressive
+        /// secures direct points, holds cards back
+        | Cautious
 
     // ── Evaluation helpers ──────────────────────────────────
 

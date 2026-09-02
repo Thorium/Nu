@@ -50,9 +50,12 @@ module Ly =
     let cardGap = 5.0f
     let tableGap = 4.0f
 
-    let handY = -130.0f          // human hand at bottom
-    let tableY = 10.0f           // table center
-    let topOppY = 135.0f         // top opponent
+    /// human hand at bottom
+    let handY = -130.0f
+    /// table center
+    let tableY = 10.0f
+    /// top opponent
+    let topOppY = 135.0f
     let sideLeftX = -285.0f
     let sideRightX = 285.0f
 
@@ -157,13 +160,17 @@ module Clr =
     let white = color 1.0f 1.0f 1.0f 1.0f
     let gray = color 0.627f 0.627f 0.627f 1.0f
     let lightGray = color 0.827f 0.827f 0.827f 1.0f
-    let tintGreen = color 0.7f 1.0f 0.7f 1.0f              // definite capture tint
-    let tintYellow = color 1.0f 1.0f 0.65f 1.0f            // possible capture tint
+    /// definite capture tint
+    let tintGreen = color 0.7f 1.0f 0.7f 1.0f
+    /// possible capture tint
+    let tintYellow = color 1.0f 1.0f 0.65f 1.0f
     let yellow = color 1.0f 1.0f 0.0f 1.0f
     let limeGreen = color 0.196f 0.804f 0.196f 1.0f
     let lightSalmon = color 1.0f 0.627f 0.478f 1.0f
     let lightGreen = color 0.565f 0.933f 0.565f 1.0f
     let darkGray = color 0.412f 0.412f 0.412f 1.0f
     let modalOverlay = color 0.0f 0.0f 0.0f 0.627f
-    let cardRed = color 1.0f 0.53f 0.49f 1.0f      // red-suit tint for card names in text
-    let cardGray = color 0.745f 0.745f 0.745f 1.0f // black-suit tint for card names in text
+    /// red-suit tint for card names in text
+    let cardRed = color 1.0f 0.53f 0.49f 1.0f
+    /// black-suit tint for card names in text
+    let cardGray = color 0.745f 0.745f 0.745f 1.0f

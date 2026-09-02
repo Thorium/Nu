@@ -84,7 +84,10 @@ type ScoreDispatcher () =
             [ string b.MostCards; string b.MostSpades; string b.Aces; string b.DiamondTen
               string b.SpadeTwo; string b.Sweeps; string b.Total
               string (Map.tryFind p.Name model.Cumulative |> Option.defaultValue 0) ]
-        let rowColor i = if i = 6 then Clr.yellow elif i = 7 then Clr.gold else Clr.white
+        let rowColor i = match i with
+                         | 6 -> Clr.yellow
+                         | 7 -> Clr.gold
+                         | _ -> Clr.white
 
         let cell name (s: string) x y (col: Color) (size: single) just =
             Content.text name

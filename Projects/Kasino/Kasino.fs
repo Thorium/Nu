@@ -74,7 +74,8 @@ type TableLayout =
 type DragState =
     | NotDragging
     | Dragging of cardIndex: int * startPos: Vector2 * currentPos: Vector2
-    | DraggingTable of card: Card * grabOffsetX: float32 * grabOffsetY: float32   // nudging a table card (scatter mode)
+    /// nudging a table card (scatter mode)
+    | DraggingTable of card: Card * grabOffsetX: float32 * grabOffsetY: float32
 
 // ─── Game Property Extensions ─────────────────────────────────────────
 [<AutoOpen>]
@@ -134,7 +135,8 @@ module AppState =
     // Layout & drag state
     let mutable tableLayout = RandomScatter
     let mutable dragState : DragState = NotDragging
-    let mutable scatteredPositions : Map<Card, (float32 * float32 * float32)> = Map.empty  // card -> (x, y, rotation)
+    /// card -> (x, y, rotation)
+    let mutable scatteredPositions : Map<Card, (float32 * float32 * float32)> = Map.empty
 
     // Animation state
     let mutable currentCardAnim : CardAnimation option = None
@@ -303,11 +305,16 @@ module Ly =
     let tableGap = 4.0f
 
     // Y positions (center origin, Y up) — fitted to 640×360 viewport
-    let handY = -130.0f          // human hand at bottom (card bottom at -169)
-    let tableY = 10.0f           // table center
-    let topOppY = 135.0f         // top opponent (card top at 174)
-    let sideLeftX = -285.0f      // left side opponent (card edge at -315)
-    let sideRightX = 285.0f      // right side opponent (card edge at 315)
+    /// human hand at bottom (card bottom at -169)
+    let handY = -130.0f
+    /// table center
+    let tableY = 10.0f
+    /// top opponent (card top at 174)
+    let topOppY = 135.0f
+    /// left side opponent (card edge at -315)
+    let sideLeftX = -285.0f
+    /// right side opponent (card edge at 315)
+    let sideRightX = 285.0f
 
     /// Which edge of the table a player occupies, viewed from the bottom seat.
     type Seat =
@@ -331,13 +338,18 @@ module Ly =
         | _, _ -> SeatRight
 
     // Table area dimensions (centered at 0, tableY)
-    let tableW = 500.0f          // narrower to leave room for side hands
-    let tableH = 130.0f          // compressed to fit viewport
+    /// narrower to leave room for side hands
+    let tableW = 500.0f
+    /// compressed to fit viewport
+    let tableH = 130.0f
 
     // Max entity slots
-    let maxHand = 4              // max cards in hand (dealt 4 at a time)
-    let maxTable = 26            // max table cards (theoretical max)
-    let maxOppHand = 4           // max opponent cards shown
+    /// max cards in hand (dealt 4 at a time)
+    let maxHand = 4
+    /// max table cards (theoretical max)
+    let maxTable = 26
+    /// max opponent cards shown
+    let maxOppHand = 4
 
     // Menu/UI positions
     let titleY = 155.0f
@@ -362,17 +374,23 @@ module Ly =
 
 // ─── Colors ───────────────────────────────────────────────────────────
 module Clr =
-    let screenBg = color 0.098f 0.196f 0.137f 1.0f        // dark poker green (25,50,35)
-    let tableBg = color 0.137f 0.392f 0.216f 1.0f          // poker-green felt (35,100,55)
+    /// dark poker green (25,50,35)
+    let screenBg = color 0.098f 0.196f 0.137f 1.0f
+    /// poker-green felt (35,100,55)
+    let tableBg = color 0.137f 0.392f 0.216f 1.0f
     let gold = color 1.0f 0.843f 0.0f 1.0f
     let white = color 1.0f 1.0f 1.0f 1.0f
     let gray = color 0.627f 0.627f 0.627f 1.0f
     let lightGray = color 0.827f 0.827f 0.827f 1.0f
     let green = color 0.0f 0.549f 0.0f 1.0f
-    let darkGreen = color 0.0f 0.275f 0.0f 0.353f          // capture definite overlay (unused)
-    let darkYellow = color 0.275f 0.275f 0.0f 0.353f       // capture possible overlay (unused)
-    let tintGreen = color 0.7f 1.0f 0.7f 1.0f              // definite capture card tint
-    let tintYellow = color 1.0f 1.0f 0.65f 1.0f            // possible capture card tint
+    /// capture definite overlay (unused)
+    let darkGreen = color 0.0f 0.275f 0.0f 0.353f
+    /// capture possible overlay (unused)
+    let darkYellow = color 0.275f 0.275f 0.0f 0.353f
+    /// definite capture card tint
+    let tintGreen = color 0.7f 1.0f 0.7f 1.0f
+    /// possible capture card tint
+    let tintYellow = color 1.0f 1.0f 0.65f 1.0f
     let limeGreen = color 0.196f 0.804f 0.196f 1.0f
     let yellow = color 1.0f 1.0f 0.0f 1.0f
     let lightSalmon = color 1.0f 0.627f 0.478f 1.0f
@@ -382,8 +400,10 @@ module Clr =
     let btnGreen = color 0.157f 0.392f 0.157f 1.0f
     let btnBlue = color 0.157f 0.314f 0.471f 1.0f
     let btnRed = color 0.471f 0.157f 0.157f 1.0f
-    let cardRed = color 1.0f 0.53f 0.49f 1.0f              // red-suit tint for card names in text
-    let cardGray = color 0.745f 0.745f 0.745f 1.0f         // black-suit tint for card names in text
+    /// red-suit tint for card names in text
+    let cardRed = color 1.0f 0.53f 0.49f 1.0f
+    /// black-suit tint for card names in text
+    let cardGray = color 0.745f 0.745f 0.745f 1.0f
     let btnPurple = color 0.314f 0.235f 0.471f 1.0f
     let btnDark = color 0.235f 0.314f 0.235f 1.0f
     let modalOverlay = color 0.0f 0.0f 0.0f 0.627f
@@ -1144,9 +1164,8 @@ type KasinoDispatcher () =
             if world.Unaccompanied then World.exit world
 
         // Escape to quit from menu
-        if world.Advancing then
-            if World.isKeyboardKeyPressed KeyboardKey.Escape world && world.Unaccompanied then
-                World.exit world
+        if world.Advancing && World.isKeyboardKeyPressed KeyboardKey.Escape world && world.Unaccompanied then
+            World.exit world
 
     // ═══════════════════════════════════════════════════════════════
     //  GAME SCREEN
@@ -1389,7 +1408,7 @@ type KasinoDispatcher () =
                  Entity.Elevation .= 2.0f] world
 
         // ── Draw human hand (bottom) ──────────────────────────
-        let isDraggingIdx = match AppState.dragState with Dragging(idx, _, _) -> Some idx | _ -> None
+        let isDraggingIdx = match AppState.dragState with Dragging(idx, _, _) -> Some idx | NotDragging | DraggingTable _ -> None
         for i in 0 .. Ly.maxHand - 1 do
             let name = $"HC{i}"
             if i < handSize then
@@ -1630,7 +1649,7 @@ type KasinoDispatcher () =
             | WaitingForHuman when AppState.selectedCardIndex.IsSome -> ""
             | WaitingForHuman -> ""
             | ComputerThinking -> $"{gs.Players[gs.CurrentPlayerIndex].Name} thinking..."
-            | ChoosingCaptureOption -> ""
+            | ChoosingCaptureOption
             | AnimatingPlay -> ""
             | Shuffling -> "Shuffling..."
             | Dealing -> "Dealing..."
@@ -1745,7 +1764,7 @@ type KasinoDispatcher () =
                 game.SetKasinoMode KasinoMenu world
 
         // ── "Play Card" button (always declared) ──────────────
-        let notDragging = match AppState.dragState with NotDragging -> true | _ -> false
+        let notDragging = match AppState.dragState with NotDragging -> true | Dragging _ | DraggingTable _ -> false
         let btnPlayVisible = AppState.phase = WaitingForHuman && isHuman && AppState.selectedCardIndex.IsSome && notDragging
         let btnPlayLabel =
             if btnPlayVisible then
@@ -1773,7 +1792,7 @@ type KasinoDispatcher () =
         let btnPlaceVisible =
             btnPlayVisible
             && gs.Variant = StandardKasino
-            && (match AppState.capturePreview with NoCapture -> false | _ -> true)
+            && (match AppState.capturePreview with NoCapture -> false | SingleCapture _ | MultipleCaptures _ -> true)
         if World.doButton "BtnPlaceInstead"
             [Entity.Position .= v3 165.0f (Ly.handY + 45.0f) 0.0f
              Entity.Size .= v3 130.0f Ly.btnH 0.0f
@@ -1862,7 +1881,7 @@ type KasinoDispatcher () =
                         if j = 5 && captured.Length > 6 then ("…", Clr.white)
                         else
                             let c = captured[j]
-                            (Cards.display c, (match c.Suit with Hearts | Diamonds -> Clr.cardRed | _ -> Clr.cardGray))
+                            (Cards.display c, (match c.Suit with Hearts | Diamonds -> Clr.cardRed | Spades | Clubs -> Clr.cardGray))
                     else ("", Clr.white)
                 World.doText $"OptCard{i}_{j}"
                     [Entity.Position .= v3 (-109.0f + float32 j * 38.0f) y 0.0f
@@ -2400,7 +2419,7 @@ type KasinoDispatcher () =
             let name = $"RuLine{i}"
             if i < lines.Length then
                 let lineColor =
-                    if lines[i].StartsWith("  ") then Clr.lightGray
+                    if lines[i].StartsWith "  " then Clr.lightGray
                     elif lines[i] = "" then color 0.0f 0.0f 0.0f 0.0f
                     else Clr.white
                 World.doText name

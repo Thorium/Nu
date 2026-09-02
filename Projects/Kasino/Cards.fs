@@ -9,10 +9,14 @@ open System
 /// Card suit (maa)
 [<Struct>]
 type Suit =
-    | Spades    // Pata
-    | Hearts    // Hertta
-    | Diamonds  // Ruutu
-    | Clubs     // Risti
+    /// Pata
+    | Spades
+    /// Hertta
+    | Hearts
+    /// Ruutu
+    | Diamonds
+    /// Risti
+    | Clubs
 
 /// Card rank (arvo)
 [<Struct>]
@@ -38,8 +42,10 @@ type Card = { Suit: Suit; Rank: Rank }
 /// Game variant
 [<Struct>]
 type GameVariant =
-    | StandardKasino   // Maximize points
-    | LaistoKasino     // Minimize points (also known as Misa-Kasino)
+    /// Maximize points
+    | StandardKasino
+    /// Minimize points (also known as Misa-Kasino)
+    | LaistoKasino
 
 /// Player type
 [<Struct>]

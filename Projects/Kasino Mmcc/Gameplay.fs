@@ -154,22 +154,31 @@ type GameplayMessage =
     | TimeUpdate
     | SelectCard of int
     | PlaySelectedCard
-    | PlaceSelectedCard      // Standard only: place a capture-capable card without capturing
+    /// Standard only: place a capture-capable card without capturing
+    | PlaceSelectedCard
     | ChooseCapture of int
-    | CancelCapture          // dismiss the capture modal without playing
-    | CapturePageNext        // advance the paginated capture modal
+    /// dismiss the capture modal without playing
+    | CancelCapture
+    /// advance the paginated capture modal
+    | CapturePageNext
     | KeyPressed of KeyboardKey
     | PointerDown            // left mouse down — grab a hand card (drag & drop)
-    | PointerDrag            // mouse moved with button held — move the dragged card
-    | PointerUp              // left mouse up — drop on the table to play, else just select
+    /// mouse moved with button held — move the dragged card
+    | PointerDrag
+    /// left mouse up — drop on the table to play, else just select
+    | PointerUp
     | Ignore
     interface Message
 
 type GameplayCommand =
-    | RequestQuit            // publish QuitEvent → top-level game returns to menu
-    | RequestHelp            // publish HelpEvent → open rules, return to the game
-    | ShowScoresCmd          // publish ShowScoresEvent → top-level game shows scores
-    | PlayCaptureSound       // audio side-effects
+    /// publish QuitEvent → top-level game returns to menu
+    | RequestQuit
+    /// publish HelpEvent → open rules, return to the game
+    | RequestHelp
+    /// publish ShowScoresEvent → top-level game shows scores
+    | ShowScoresCmd
+    /// audio side-effects
+    | PlayCaptureSound
     | PlaySweepSound
     | PlayPlaceSound
     interface Command
@@ -844,7 +853,7 @@ type GameplayDispatcher () =
                             else Cards.display c
                         let col =
                             if txt = "…" then Clr.white
-                            else match c.Suit with Hearts | Diamonds -> Clr.cardRed | _ -> Clr.cardGray
+                            else match c.Suit with Hearts | Diamonds -> Clr.cardRed | Spades | Clubs -> Clr.cardGray
                         Content.text ("CaptureOptCard" + string i + "_" + string j)
                             [Entity.Position := v3 (-134.0f + float32 j * 44.0f) y 0.0f
                              Entity.Size == v3 44.0f 24.0f 0.0f
@@ -1002,7 +1011,7 @@ type GameplayDispatcher () =
 
                 // play button (only when a card is selected on the human's turn);
                 // placed to the right of the hand so it never overlaps the status text
-                if interactive && Option.isSome gameplay.SelectedCardIndex && gameplay.DragIndex = None then
+                if interactive && Option.isSome gameplay.SelectedCardIndex && gameplay.DragIndex |> Option.isNone then
                     Content.button "PlayBtn"
                         [Entity.Position == v3 210.0f Ly.handY 0.0f
                          Entity.Size == v3 120.0f 30.0f 0.0f
@@ -1012,7 +1021,7 @@ type GameplayDispatcher () =
                     // Standard Kasino: capturing is optional — offer to place the
                     // selected card instead when it could capture
                     if gameplay.Config.Variant = StandardKasino
-                       && (match gameplay.CapturePreview with NoCapture -> false | _ -> true) then
+                       && (match gameplay.CapturePreview with NoCapture -> false | SingleCapture _ | MultipleCaptures _ -> true) then
                         Content.button "PlaceBtn"
                             [Entity.Position == v3 210.0f (Ly.handY - 36.0f) 0.0f
                              Entity.Size == v3 120.0f 30.0f 0.0f

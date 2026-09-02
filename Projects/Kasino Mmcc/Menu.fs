@@ -51,9 +51,12 @@ type MenuMessage =
     interface Message
 
 type MenuCommand =
-    | StartGameCmd of GameEngine.GameConfig   // publish StartGameEvent (→ game starts a match)
-    | ShowRulesCmd                            // publish ShowRulesEvent (→ tutorial screen)
-    | ExitGame                                // quit the whole application
+    /// publish StartGameEvent (→ game starts a match)
+    | StartGameCmd of GameEngine.GameConfig
+    /// publish ShowRulesEvent (→ tutorial screen)
+    | ShowRulesCmd
+    /// quit the whole application
+    | ExitGame
     interface Command
 
 [<AutoOpen>]

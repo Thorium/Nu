@@ -19,12 +19,15 @@ type KasinoGame =
     | AtMenu
     | Playing
     | AtScores
-    | Tutorial of returnTo: KasinoGame    // rules screen remembers where to go back
+    /// rules screen remembers where to go back
+    | Tutorial of returnTo: KasinoGame
 
 type KasinoGameMessage =
     | ShowMenu
-    | ShowRules                           // from menu → return to menu
-    | ShowHelp                            // from gameplay → return to gameplay
+    /// from menu → return to menu
+    | ShowRules
+    /// from gameplay → return to gameplay
+    | ShowHelp
     | CloseRules
     | StartGame of GameEngine.GameConfig
     | ShowScores
@@ -109,9 +112,9 @@ type KasinoGameDispatcher () =
         // replacing the default Nu slide logo (SlideImageOpt = None hides it).
         let aces = [ Spades, 18.0f; Hearts, 6.0f; Diamonds, -6.0f; Clubs, -18.0f ]
         let aceCards =
+            let r = 130.0f
             [ for i, (suit, deg) in List.indexed aces do
                 let a = deg * 0.017453293f          // degrees → radians
-                let r = 130.0f
                 Content.staticSprite ("Ace" + string i)
                     [Entity.Position == v3 (-r * sin a) (-100.0f + r * cos a) 0.0f
                      Entity.Size == v3 60.0f 78.0f 0.0f
