@@ -32,7 +32,8 @@ let PlayersPerTeam5 = 6
 [<Literal>]
 let MaxPlayersPerTeam = 6
 
-let MaxEntities = MaxPlayersPerTeam * 2 + 1 // 13
+/// 13
+let MaxEntities = MaxPlayersPerTeam * 2 + 1
 
 [<Literal>]
 let NumTeams = 10

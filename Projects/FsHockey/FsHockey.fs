@@ -99,7 +99,8 @@ module FsHockeyExtensions =
 module Coords =
     let scale = 1.5f
     let gameW = 320.0f
-    let gameH = 248.0f // 200 field + 48 HUD
+    /// 200 field + 48 HUD
+    let gameH = 248.0f
     let halfW = gameW / 2.0f
     let halfH = gameH / 2.0f
 
@@ -133,7 +134,8 @@ module Colors =
     let white = color 1.0f 1.0f 1.0f 1.0f
     let gray = color 0.627f 0.627f 0.627f 1.0f
     let dim = color 0.412f 0.412f 0.49f 1.0f
-    let activeMarker = color 0.353f 1.0f 0.471f 1.0f   // green caret over the controlled player
+    /// green caret over the controlled player
+    let activeMarker = color 0.353f 1.0f 0.471f 1.0f
     // button label color: the default ButtonUp/ButtonDown images are dark
     // green, so labels want to be near-white
     let buttonText = color 0.94f 0.94f 0.94f 1.0f

@@ -421,7 +421,7 @@ let private checkWallsAndGoals idx (m: Match) =
         e <- { e with Y = FieldBottom; VelY = -(abs e.VelY) }
 
     // Clamp safety
-    if not isPuck || not scored then
+    if not (isPuck && scored) then
         e <- { e with X = clamp FieldLeft FieldRight e.X }
     e <- { e with Y = clamp FieldTop FieldBottom e.Y }
 
@@ -538,7 +538,7 @@ let private tryFindPassMate (m: Match) idx isTeam1 =
                     if forward > bestForward then
                         bestForward <- forward
                         best <- ei
-    if best >= 0 then Some best else None
+    if best >= 0 then ValueSome best else ValueNone
 
 /// Aim at a teammate (8-way, since the puck leaves along DirX/DirY) and pass.
 let private aiPassTo idx mateIdx (m: Match) =
@@ -631,8 +631,8 @@ let private aiActivePlayer idx isTeam1 (m: Match) =
             // Opponent right on us: pass if someone is open, otherwise
             // skate a bit backwards and sideways to find a better spot
             match tryFindPassMate m idx isTeam1 with
-            | Some mateIdx -> aiPassTo idx mateIdx m
-            | None ->
+            | ValueSome mateIdx -> aiPassTo idx mateIdx m
+            | ValueNone ->
                 let backX = ent.X - goalDir * 20.0<px>
                 let sideY = if opp.Y > ent.Y then ent.Y - 24.0<px> else ent.Y + 24.0<px>
                 withEnt idx
@@ -653,8 +653,8 @@ let private aiActivePlayer idx isTeam1 (m: Match) =
             // Blocker ahead but not on us yet: pass if a mate is open,
             // otherwise dodge laterally around the blocker, keeping the puck
             match tryFindPassMate m idx isTeam1 with
-            | Some mateIdx -> aiPassTo idx mateIdx m
-            | None ->
+            | ValueSome mateIdx -> aiPassTo idx mateIdx m
+            | ValueNone ->
                 let sideY = if opp.Y > ent.Y then ent.Y - 28.0<px> else ent.Y + 28.0<px>
                 withEnt idx
                     (aiMoveToward
