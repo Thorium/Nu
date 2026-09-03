@@ -88,7 +88,7 @@ type MenuDispatcher () =
             let step =
                 match menu.Step with
                 | HumanCountSelect -> PlayerCountSelect
-                | PlayerCountSelect -> VariantSelect
+                | PlayerCountSelect
                 | VariantSelect -> VariantSelect
             just { menu with Step = step }
         | OpenOptions -> just { menu with ShowingOptions = true }

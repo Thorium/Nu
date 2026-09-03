@@ -20,6 +20,7 @@ open Nu
 open Kasino.Domain
 
 // ── Model ─────────────────────────────────────────────────────────────
+[<Struct>]
 type Tutorial =
     { CurrentPage: int }
     static member initial = { CurrentPage = 0 }

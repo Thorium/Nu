@@ -26,6 +26,7 @@ module Scoring =
     /// Undistributed most-cards / most-spades points. When a category ties,
     /// its round points join the pot and roll into the next round; whoever
     /// then wins the category outright collects the whole pot.
+    [<Struct>]
     type CarryOver =
         { CardsPool: int
           SpadesPool: int }

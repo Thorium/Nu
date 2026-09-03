@@ -13,6 +13,7 @@ module Combinations =
     /// conflict precompute in Rules.findCaptureOptions over those would
     /// freeze the turn. Real play needs only a handful; Bron-Kerbosch is
     /// separately capped at 64 options.
+    [<Literal>]
     let private maxSubsets = 128
 
     /// Find subsets of items whose values sum exactly to target, up to

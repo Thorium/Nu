@@ -128,6 +128,7 @@ module AppState =
     let mutable lastEval : AI.PlayEvaluation option = None
 
     /// Number of available card-back designs (back1.png .. backN.png)
+    [<Literal>]
     let backDesignCount = 3
     /// Asset name of the card back chosen for the current game (one of back1..backN)
     let mutable currentBack = "back1"
@@ -144,6 +145,7 @@ module AppState =
     let mutable shuffleDuration = 0.6f
     let mutable cardSlideDuration = 0.25f
     let mutable collectSlideDuration = 0.35f
+    [<Literal>]
     let dealStepDuration = 0.18f
 
     // Deal animation state
@@ -162,7 +164,9 @@ module AppState =
     // Input guard: prevents Enter key from firing across multiple screens in the same frame
     let mutable enterConsumed = false
 
+    [<Literal>]
     let computerDelay = 0.8f
+    [<Literal>]
     let animDelay = 1.4f
 
     /// Reset menu to defaults
@@ -299,21 +303,30 @@ module CardImg =
 // Nu virtual resolution is 640×360 → visible range ±320 (X) × ±180 (Y)
 module Ly =
     // Card dimensions in world units
+    [<Literal>]
     let cardW = 44.0f
+    [<Literal>]
     let cardH = 57.0f
+    [<Literal>]
     let cardGap = 5.0f
+    [<Literal>]
     let tableGap = 4.0f
 
     // Y positions (center origin, Y up) — fitted to 640×360 viewport
     /// human hand at bottom (card bottom at -169)
+    [<Literal>]
     let handY = -130.0f
     /// table center
+    [<Literal>]
     let tableY = 10.0f
     /// top opponent (card top at 174)
+    [<Literal>]
     let topOppY = 135.0f
     /// left side opponent (card edge at -315)
+    [<Literal>]
     let sideLeftX = -285.0f
     /// right side opponent (card edge at 315)
+    [<Literal>]
     let sideRightX = 285.0f
 
     /// Which edge of the table a player occupies, viewed from the bottom seat.
@@ -339,32 +352,47 @@ module Ly =
 
     // Table area dimensions (centered at 0, tableY)
     /// narrower to leave room for side hands
+    [<Literal>]
     let tableW = 500.0f
     /// compressed to fit viewport
+    [<Literal>]
     let tableH = 130.0f
 
     // Max entity slots
     /// max cards in hand (dealt 4 at a time)
+    [<Literal>]
     let maxHand = 4
     /// max table cards (theoretical max)
+    [<Literal>]
     let maxTable = 26
     /// max opponent cards shown
+    [<Literal>]
     let maxOppHand = 4
 
     // Menu/UI positions
+    [<Literal>]
     let titleY = 155.0f
+    [<Literal>]
     let subtitleY = 125.0f
+    [<Literal>]
     let menuBaseY = 55.0f
+    [<Literal>]
     let btnW = 240.0f
+    [<Literal>]
     let btnH = 28.0f
+    [<Literal>]
     let btnGap = 36.0f
 
     // Status bar Y
+    [<Literal>]
     let statusY = -95.0f
+    [<Literal>]
     let turnTextY = -110.0f
 
     // Scoreboard position (top right)
+    [<Literal>]
     let scoreX = 200.0f
+    [<Literal>]
     let scoreTopY = 165.0f
 
     /// Center N cards horizontally, returns X of leftmost card
@@ -755,7 +783,9 @@ module RulesContent =
         | VisualPage of title: string * cards: CardSpot list * caps: Caption list
 
     // ── Visual-page layout helpers (Nu virtual res ±320 × ±180) ──
+    [<Literal>]
     let private tcw = 38.0f      // tutorial card width
+    [<Literal>]
     let private tch = 49.0f      // tutorial card height
 
     /// Centered header/footer line at y.

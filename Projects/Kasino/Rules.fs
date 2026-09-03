@@ -118,4 +118,5 @@ module Rules =
         captured |> List.sumBy Cards.scoringValue
 
     /// Sweep bonus points.
+    [<Literal>]
     let sweepBonus = 1.0

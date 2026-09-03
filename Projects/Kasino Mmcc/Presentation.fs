@@ -45,18 +45,27 @@ module CardImg =
 [<RequireQualifiedAccess>]
 module Ly =
 
+    [<Literal>]
     let cardW = 44.0f
+    [<Literal>]
     let cardH = 57.0f
+    [<Literal>]
     let cardGap = 5.0f
+    [<Literal>]
     let tableGap = 4.0f
 
     /// human hand at bottom
+    [<Literal>]
     let handY = -130.0f
     /// table center
+    [<Literal>]
     let tableY = 10.0f
     /// top opponent
+    [<Literal>]
     let topOppY = 135.0f
+    [<Literal>]
     let sideLeftX = -285.0f
+    [<Literal>]
     let sideRightX = 285.0f
 
     /// Which edge of the table a player occupies, viewed from the bottom seat.
@@ -80,17 +89,27 @@ module Ly =
         | _, 2 -> SeatTop
         | _, _ -> SeatRight
 
+    [<Literal>]
     let tableW = 500.0f
+    [<Literal>]
     let tableH = 130.0f
 
+    [<Literal>]
     let titleY = 155.0f
+    [<Literal>]
     let subtitleY = 125.0f
+    [<Literal>]
     let menuBaseY = 55.0f
+    [<Literal>]
     let btnW = 240.0f
+    [<Literal>]
     let btnH = 28.0f
+    [<Literal>]
     let btnGap = 36.0f
 
+    [<Literal>]
     let statusY = -95.0f
+    [<Literal>]
     let turnTextY = -110.0f
 
     /// X of the leftmost of N centered cards.
@@ -98,6 +117,7 @@ module Ly =
         let totalW = float32 count * (cardW + gap) - gap
         -totalW / 2.0f
 
+    [<Literal>]
     let private tableRowGap = 5.0f
 
     /// Center position of the i-th of `count` table cards. Up to 7 cards sit

@@ -50,6 +50,7 @@ type CollectAnim =
       ToX: float32; ToY: float32 }
 
 // ─── Deal animation: a sequence of steps, each sliding N backs from the deck ──
+[<Struct>]
 type DealTarget =
     | DealToTable
     | DealToSeat of int
@@ -197,12 +198,18 @@ module GameplayExtensions =
 // ─── Phase-machine timing (engine updates @ 60/s) ─────────────────────
 [<RequireQualifiedAccess>]
 module private Ticks =
+    [<Literal>]
     let shuffle = 36L         // 0.6s
+    [<Literal>]
     let think = 48L           // 0.8s
     let slide = 15L           // 0.25s — played card slides hand → table
+    [<Literal>]
     let collectStart = 15L    // collect begins as the slide ends
+    [<Literal>]
     let collectDur = 21L      // 0.35s — captured cards slide table → player
+    [<Literal>]
     let anim = 60L            // 1.0s total AnimatingPlay (slide + collect + brief hold)
+    [<Literal>]
     let dealStep = 11L        // 0.18s per deal step (one slide of N backs)
 
     /// Ease-out interpolation factor for elapsed/duration.
