@@ -73,6 +73,7 @@ type Gameplay =
       CaptureOptions: Rules.CaptureOption list
       CapturePage: int                              // current page of the capture modal (it paginates)
       LastPlayMessage: string
+      ShowRecentPlays: bool                         // "Last moves" popup listing the other seats' recent plays
       LastChat: string
       LastEval: AI.PlayEvaluation option
       ScoreBreakdowns: (Player * Scoring.ScoreBreakdown) list
@@ -86,14 +87,19 @@ type Gameplay =
       TableDragCard: Card option           // table card being nudged (drag to reposition)
       TableOffsets: Map<Card, single * single> } // per-card manual nudges within the table area
 
+    /// The engine synchronizes a screen's Content at registration, before any
+    /// match exists, so the empty state carries two placeholder seats: the
+    /// Content indexes Players (shown seat, current player) unconditionally.
     static member private emptyState : GameEngine.GameState =
-        { Players = []
+        let placeholder = { Name = ""; Type = Computer; Hand = []; CapturedCards = []; Sweeps = 0 }
+        { Players = [ placeholder; placeholder ]
           Table = []
           Deck = []
           CurrentPlayerIndex = 0
           DealRound = 0
           TotalDeals = 0
           LastCapturer = None
+          RecentPlays = []
           Variant = StandardKasino
           SweepsFrozen = false }
 
@@ -113,6 +119,7 @@ type Gameplay =
           CaptureOptions = []
           CapturePage = 0
           LastPlayMessage = ""
+          ShowRecentPlays = false
           LastChat = ""
           LastEval = None
           ScoreBreakdowns = []
@@ -148,7 +155,8 @@ type Gameplay =
             CumulativeScores = players |> List.map (fun p -> p.Name, 0) |> Map.ofList
             Back = back
             DealerOffset = dealerOffset
-            LastPlayMessage = "Round 1 - Deal 1" }
+            LastPlayMessage = "Round 1 - Deal 1"
+            ShowRecentPlays = false }
 
 // ─── Messages (pure model transitions) and Commands (side-effects) ────
 type GameplayMessage =
@@ -168,6 +176,8 @@ type GameplayMessage =
     | PointerDrag
     /// left mouse up — drop on the table to play, else just select
     | PointerUp
+    /// toggle the "Last moves" popup (what the other seats did since your play)
+    | ToggleRecentPlays
     | Ignore
     interface Message
 
@@ -595,6 +605,10 @@ type GameplayDispatcher () =
 
         | PointerDown ->
             let p = World.getMousePosition2dWorld false world
+            // any click outside the "?" button (210,165 / 28x22) closes the
+            // recent-moves panel; the button's own click toggles it
+            let onRecentBtn = abs (p.X - 210.0f) <= 14.0f && abs (p.Y - 165.0f) <= 11.0f
+            let gameplay = if gameplay.ShowRecentPlays && not onRecentBtn then { gameplay with ShowRecentPlays = false } else gameplay
             match (if gameplay.Phase = WaitingForHuman then handHitTest p else None) with
             | Some i ->
                 // grab a hand card: select it (showing the capture preview) and begin a play-drag
@@ -633,6 +647,7 @@ type GameplayDispatcher () =
                 else just { ended with DragIndex = None }
             | _ -> just { ended with DragIndex = None }
 
+        | ToggleRecentPlays -> just { gameplay with ShowRecentPlays = not gameplay.ShowRecentPlays }
         | Ignore -> just gameplay
 
     override this.Command (_, command, screen, world) =
@@ -654,6 +669,9 @@ type GameplayDispatcher () =
             World.playSound 0.0f 0.0f 0.5f Assets.Default.Sound world
 
     override this.Content (gameplay, _) =
+
+        // deck style chosen on the menu for this match
+        let style = gameplay.Config.Settings.CardStyle
 
         // ── derived presentation data ───────────────────────────────
         let st = gameplay.State
@@ -711,7 +729,7 @@ type GameplayDispatcher () =
                 Content.staticSprite ("TableCard" + string i)
                     [Entity.Position := v3 (bx + ox) (by + oy) 0.0f
                      Entity.Size == v3 Ly.cardW Ly.cardH 0.0f
-                     Entity.StaticImage := CardImg.cardAsset card
+                     Entity.StaticImage := CardImg.cardAssetOf style card
                      Entity.Color := tintFor card
                      Entity.Visible := (Some card <> hiddenCard)
                      Entity.Elevation := (if gameplay.TableDragCard = Some card then 4.0f else 1.0f)] ]
@@ -732,7 +750,7 @@ type GameplayDispatcher () =
                         Content.staticSprite ("HandCard" + string i)
                             [Entity.Position := v3 hx (Ly.handY + lift) 0.0f
                              Entity.Size == v3 Ly.cardW Ly.cardH 0.0f
-                             Entity.StaticImage := CardImg.cardAsset card
+                             Entity.StaticImage := CardImg.cardAssetOf style card
                              Entity.Elevation == 2.0f] ]
 
         // the dragged card follows the cursor (drawn above everything but the modals)
@@ -745,7 +763,7 @@ type GameplayDispatcher () =
                     [ Content.staticSprite "DragCard"
                         [Entity.Position := v3 dx dy 0.0f
                          Entity.Size == v3 Ly.cardW Ly.cardH 0.0f
-                         Entity.StaticImage := CardImg.cardAsset card
+                         Entity.StaticImage := CardImg.cardAssetOf style card
                          Entity.Elevation == 6.0f] ]
                 | None -> []
             | _ -> []
@@ -756,7 +774,7 @@ type GameplayDispatcher () =
         let oppContent =
             // In a spectated (watch-mode) game the "backs" are drawn face-up.
             let cardImgFor (p: Player) (j: int) =
-                if humanSeatOpt.IsSome then CardImg.handBackAsset else CardImg.cardAsset p.Hand[j]
+                if humanSeatOpt.IsSome then CardImg.handBackAssetOf style gameplay.Back else CardImg.cardAssetOf style p.Hand[j]
             let opponents = players |> List.indexed |> List.filter (fun (i, _) -> i <> shownSeat)
             [ for (i, p) in opponents do
                 let handN = dealVisible (DealToSeat i) (List.length p.Hand)
@@ -916,7 +934,7 @@ type GameplayDispatcher () =
                         [ Content.staticSprite "AnimCard"
                             [Entity.Position := v3 (a.FromX + (a.ToX - a.FromX) * e) (a.FromY + (a.ToY - a.FromY) * e) 0.0f
                              Entity.Size == v3 Ly.cardW Ly.cardH 0.0f
-                             Entity.StaticImage := CardImg.cardAsset a.Card
+                             Entity.StaticImage := CardImg.cardAssetOf style a.Card
                              Entity.Elevation == 5.0f] ]
                     | _ -> []
                 let collectPart =
@@ -927,7 +945,7 @@ type GameplayDispatcher () =
                             Content.staticSprite ("ColC" + string ci)
                                 [Entity.Position := v3 (fx + (c.ToX - fx) * e) (fy + (c.ToY - fy) * e) 0.0f
                                  Entity.Size == v3 Ly.cardW Ly.cardH 0.0f
-                                 Entity.StaticImage := CardImg.cardAsset card
+                                 Entity.StaticImage := CardImg.cardAssetOf style card
                                  Entity.Elevation == (5.1f + float32 ci * 0.01f)] ]
                     | _ -> []
                 playPart @ collectPart
@@ -936,7 +954,7 @@ type GameplayDispatcher () =
         let dealContent =
             if not dealing then []
             else
-                let deckImg = CardImg.backAsset gameplay.Back
+                let deckImg = CardImg.backAssetOf style gameplay.Back
                 let deck =
                     [ for d in 0 .. 2 ->
                         Content.staticSprite ("Deck" + string d)
@@ -953,7 +971,7 @@ type GameplayDispatcher () =
                             Content.staticSprite ("DealC" + string c)
                                 [Entity.Position := v3 ((step.ToX + spread) * e) (Ly.tableY + (step.ToY - Ly.tableY) * e) 0.0f
                                  Entity.Size == v3 Ly.cardW Ly.cardH 0.0f
-                                 Entity.StaticImage == CardImg.handBackAsset
+                                 Entity.StaticImage == CardImg.handBackAssetOf style gameplay.Back
                                  Entity.Elevation == (5.2f + float32 c * 0.01f)] ]
                     | None -> []
                 deck @ slide
@@ -962,7 +980,7 @@ type GameplayDispatcher () =
         let shuffleContent =
             if not shuffling then []
             else
-                let back = CardImg.handBackAsset
+                let back = CardImg.handBackAssetOf style gameplay.Back
                 let t = Ticks.eased gameplay.PhaseTicks Ticks.shuffle
                 let sep = 55.0f * (1.0f - t)
                 let wiggle = float32 (gameplay.PhaseTicks % 8L) - 4.0f
@@ -999,9 +1017,10 @@ type GameplayDispatcher () =
                 yield! shuffleContent
 
                 // turn + status text
+                // beside the hand (bottom-left), off the cards
                 Content.text "TurnText"
-                    [Entity.Position == v3 0.0f Ly.turnTextY 0.0f
-                     Entity.Size == v3 560.0f 18.0f 0.0f
+                    [Entity.Position == v3 -215.0f Ly.handY 0.0f
+                     Entity.Size == v3 200.0f 18.0f 0.0f
                      Entity.Text := $"{players[st.CurrentPlayerIndex].Name}'s turn"
                      Entity.Justification == Justified (JustifyCenter, JustifyMiddle)
                      Entity.TextColor == Clr.white
@@ -1044,10 +1063,34 @@ type GameplayDispatcher () =
                      Entity.Text == "Menu"
                      Entity.Elevation == 5.0f
                      Entity.ClickEvent => RequestQuit]
-                Content.button "HelpBtn"
+                // "what did the others just do?" — popup over the top of the table
+                Content.button "RecentBtn"
                     [Entity.Position == v3 210.0f 165.0f 0.0f
                      Entity.Size == v3 28.0f 22.0f 0.0f
                      Entity.Text == "?"
+                     Entity.Elevation == 5.0f
+                     Entity.ClickEvent => ToggleRecentPlays]
+                if gameplay.ShowRecentPlays then
+                    let recent = GameEngine.describeRecentPlays gameplay.State
+                    Content.staticSprite "RecentBg"
+                        [Entity.Position == v3 0.0f 40.0f 0.0f
+                         Entity.Size := v3 420.0f (float32 recent.Length * 16.0f + 10.0f) 0.0f
+                         Entity.StaticImage == Assets.Default.White
+                         Entity.Color == color 0.0f 0.0f 0.0f 0.9f
+                         Entity.Elevation == 6.0f]
+                    for i, line in List.indexed recent do
+                        Content.text ("RecentLine" + string i)
+                            [Entity.Position := v3 0.0f (40.0f + float32 (recent.Length - 1) * 8.0f - float32 i * 16.0f) 0.0f
+                             Entity.Size == v3 410.0f 16.0f 0.0f
+                             Entity.Text := line
+                             Entity.Justification == Justified (JustifyLeft, JustifyMiddle)
+                             Entity.TextColor == Clr.gold
+                             Entity.FontSizing == Some 11.0f
+                             Entity.Elevation == 7.0f]
+                Content.button "HelpBtn"
+                    [Entity.Position == v3 170.0f 165.0f 0.0f
+                     Entity.Size == v3 28.0f 22.0f 0.0f
+                     Entity.Text == "i"
                      Entity.Elevation == 5.0f
                      Entity.ClickEvent => RequestHelp]
 

@@ -119,7 +119,8 @@ type KasinoGameDispatcher () =
                     [Entity.Position == v3 (-r * sin a) (-100.0f + r * cos a) 0.0f
                      Entity.Size == v3 60.0f 78.0f 0.0f
                      Entity.Rotation == Quaternion.CreateFromAngle2d a
-                     Entity.StaticImage == CardImg.cardAsset { Suit = suit; Rank = Ace }
+                     // always the original deck, whatever the card-style setting
+                     Entity.StaticImage == CardImg.cardAssetOf Settings.Realistic { Suit = suit; Rank = Ace }
                      Entity.Elevation == (1.0f + float32 i * 0.01f)] ]
         let splashContent =
             [Content.group "Gui" []

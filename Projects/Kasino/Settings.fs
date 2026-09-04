@@ -11,6 +11,34 @@ namespace Kasino.Domain
 /// Everything that could distract defaults to OFF.
 module Settings =
 
+    /// Which card face artwork to use. Both decks share file names
+    /// (sp1.png … clk.png, back.png, back1.png …) and live side by side in
+    /// per-style asset folders, so a front-end only swaps the folder.
+    type CardStyle =
+        /// Big top-left index and one large centre pip; made for small
+        /// screens where the traditional layout is unreadable.
+        | ScreenOptimized
+        /// The original scanned printed deck (traditional pip layout).
+        | Realistic
+
+    module CardStyle =
+        /// Asset sub-folder holding the style's card images.
+        let folder = function
+            | ScreenOptimized -> "screen"
+            | Realistic -> "realistic"
+
+        /// Short label for option toggles.
+        let label = function
+            | ScreenOptimized -> "Screen-optimized"
+            | Realistic -> "Realistic"
+
+        /// The other style (the option is a two-way toggle).
+        let next = function
+            | ScreenOptimized -> Realistic
+            | Realistic -> ScreenOptimized
+
+        let all = [ ScreenOptimized; Realistic ]
+
     type GameSettings =
         { RandomCardBacks: bool   // pick a random scenic card back per game
           DefaultScatter: bool    // start games in Random Scatter (vs Strict Grid)
@@ -20,16 +48,32 @@ module Settings =
           /// (the touched card must be played), the play button doesn't reveal
           /// how many cards a capture takes, and capture candidates are not
           /// pre-highlighted on the table.
-          StrictRules: bool }
+          StrictRules: bool
+          /// Card face artwork (see CardStyle).
+          CardStyle: CardStyle }
 
-    /// Defaults: the look that shipped (random backs + scatter) stays on; the
-    /// gameplay-flavour features are off so nothing changes unasked.
+    /// Defaults: the look that shipped (random backs + scatter, the original
+    /// deck) stays on; the gameplay-flavour features are off so nothing changes
+    /// unasked. Front-ends that can run on a phone or tablet should start from
+    /// `defaultsForDevice` instead so those get the screen-optimized deck.
     let defaultSettings =
         { RandomCardBacks = true
           DefaultScatter = true
           ChatEnabled = false
           AiPersonalities = false
-          StrictRules = false }
+          StrictRules = false
+          CardStyle = Realistic }
+
+    /// Defaults for the device at hand. On a monitor the traditional deck reads
+    /// fine and the free table scatter looks good; on a phone or tablet the
+    /// screen-optimized deck and the tidy grid layout work better. The
+    /// front-end detects the device (touch as the primary pointer, small
+    /// screen, mobile user agent) and passes the verdict here; the player can
+    /// still change both in Options.
+    let defaultsForDevice (smallScreen: bool) =
+        { defaultSettings with
+            CardStyle = if smallScreen then ScreenOptimized else Realistic
+            DefaultScatter = not smallScreen }
 
 /// Named AI opponents with a play style. Used only when AiPersonalities is on;
 /// otherwise computer players are plainly named "CPU"/"CPU 1"…

@@ -44,6 +44,15 @@ module GameEngine =
           TargetScore: int
           Settings: Settings.GameSettings }
 
+    /// One play of the round: who played which card and what it took
+    /// (Captured is empty for a placement). Kept so a player can ask "what
+    /// did the others just do?".
+    type PlayRecord =
+        { PlayerName: string
+          PlayedCard: Card
+          Captured: Card list
+          IsSweep: bool }
+
     /// Full game state
     type GameState =
         { Players: Player list
@@ -53,6 +62,9 @@ module GameEngine =
           DealRound: int
           TotalDeals: int
           LastCapturer: int option
+          /// The last (seat count - 1) plays of the round, oldest first: on a
+          /// player's turn these are the other seats' moves since their own.
+          RecentPlays: PlayRecord list
           Variant: GameVariant
           /// 10-point freeze: once any player's cumulative game score has
           /// reached 10, sweeps score nothing for the rest of the game.
@@ -172,12 +184,21 @@ module GameEngine =
             match result with
             | Capture _ -> Some idx
             | Place _   -> state.LastCapturer
+        let record =
+            match result with
+            | Capture(_, captured, isSweep) -> { PlayerName = player.Name; PlayedCard = playedCard; Captured = captured; IsSweep = isSweep }
+            | Place _ -> { PlayerName = player.Name; PlayedCard = playedCard; Captured = []; IsSweep = false }
+        let recentPlays =
+            let keep = max 1 (state.Players.Length - 1)
+            let all = state.RecentPlays @ [ record ]
+            List.skip (max 0 (all.Length - keep)) all
         { NewState =
             { state with
                 Players = updatedPlayers
                 Table = newTable
                 CurrentPlayerIndex = (idx + 1) % state.Players.Length
-                LastCapturer = lastCapturer }
+                LastCapturer = lastCapturer
+                RecentPlays = recentPlays }
           PlayResult = result
           Evaluation = eval }
 
@@ -269,6 +290,20 @@ module GameEngine =
                 Table = [] }
         | _ -> state
 
+    /// One line per recent play, oldest first, for the "Last moves" panel.
+    let describeRecentPlays (state: GameState) : string list =
+        match state.RecentPlays with
+        | [] -> [ "No moves yet this round" ]
+        | plays ->
+            plays
+            |> List.map (fun p ->
+                let card = Cards.display p.PlayedCard
+                if List.isEmpty p.Captured then $"{p.PlayerName} placed {card}"
+                else
+                    let taken = p.Captured |> List.map Cards.display |> String.concat " "
+                    let sweep = if p.IsSweep then " (sweep)" else ""
+                    $"{p.PlayerName} played {card}, taking {taken}{sweep}")
+
     /// Create a fresh round state from config.
     let newRound (config: GameConfig) (rng: Random) (players: Player list) (roundNumber: int) =
         let deck = Cards.createDeck () |> Cards.shuffle rng
@@ -283,4 +318,5 @@ module GameEngine =
           DealRound = 0
           TotalDeals = SeatCount.dealRounds config.Seats
           LastCapturer = None
+          RecentPlays = []
           Variant = config.Variant }

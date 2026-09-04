@@ -46,6 +46,7 @@ type MenuMessage =
     | ToggleChat
     | TogglePersonalities
     | ToggleStrict
+    | ToggleCardStyle
     | KeyInput of KeyboardKey
     | Nil
     interface Message
@@ -98,6 +99,7 @@ type MenuDispatcher () =
         | ToggleChat -> just { menu with Settings = { menu.Settings with ChatEnabled = not menu.Settings.ChatEnabled } }
         | TogglePersonalities -> just { menu with Settings = { menu.Settings with AiPersonalities = not menu.Settings.AiPersonalities } }
         | ToggleStrict -> just { menu with Settings = { menu.Settings with StrictRules = not menu.Settings.StrictRules } }
+        | ToggleCardStyle -> just { menu with Settings = { menu.Settings with CardStyle = Settings.CardStyle.next menu.Settings.CardStyle } }
         // Esc closes the options overlay if open, otherwise quits the application
         | KeyInput KeyboardKey.Escape -> if menu.ShowingOptions then just { menu with ShowingOptions = false } else withSignal ExitGame menu
         | KeyInput _ | Nil -> just menu
@@ -155,7 +157,7 @@ type MenuDispatcher () =
             Content.button name
                 [Entity.Position == v3 0.0f y 0.0f
                  Entity.Size == v3 380.0f Ly.btnH 0.0f
-                 Entity.Text == s
+                 Entity.Text := s
                  Entity.Elevation == 7.0f
                  Entity.ClickEvent => msg]
         let optionsOverlay =
@@ -179,10 +181,19 @@ type MenuDispatcher () =
               optBtn "OptChat" $"AI table-talk:  {onOff menu.Settings.ChatEnabled}" 4.0f ToggleChat
               optBtn "OptPers" $"AI personalities:  {onOff menu.Settings.AiPersonalities}" -34.0f TogglePersonalities
               optBtn "OptStrict" $"Strict rules (no capture cancel):  {onOff menu.Settings.StrictRules}" -72.0f ToggleStrict
+              optBtn "OptCards" $"Card deck:  {Settings.CardStyle.label menu.Settings.CardStyle}" -110.0f ToggleCardStyle
+              // live preview of the selected deck (10 of diamonds and 2 of spades)
+              // to the right of the option rows, vertically centred on them
+              for i, card in List.indexed [ { Suit = Diamonds; Rank = Ten }; { Suit = Spades; Rank = Two } ] do
+                  Content.staticSprite ("OptPreview" + string i)
+                    [Entity.Position == v3 (228.0f + float32 i * 56.0f) -15.0f 0.0f
+                     Entity.Size == v3 48.0f 62.0f 0.0f
+                     Entity.StaticImage := CardImg.cardAssetOf menu.Settings.CardStyle card
+                     Entity.Elevation == 7.0f]
               // NB: elevation 7 so it draws ABOVE the modal overlay sprite (elevation 6);
               // the generic `btn` helper uses elevation 1, which left it behind the dark dim.
               Content.button "OptBack"
-                [Entity.Position == v3 0.0f -100.0f 0.0f
+                [Entity.Position == v3 0.0f -148.0f 0.0f
                  Entity.Size == v3 160.0f Ly.btnH 0.0f
                  Entity.Text == "Back"
                  Entity.Elevation == 7.0f

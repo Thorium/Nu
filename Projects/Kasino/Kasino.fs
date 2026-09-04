@@ -115,6 +115,8 @@ module AppState =
     /// options can exist, so the modal paginates).
     let mutable capturePage = 0
     let mutable lastPlayMessage = ""
+    /// "Last moves" toggle: popup listing the other seats' plays since your own.
+    let mutable showRecentPlays = false
     /// Latest table-talk line from a computer player (empty = none shown).
     let mutable lastChat = ""
     let mutable roundNumber = 1
@@ -189,6 +191,7 @@ module AppState =
             else "back1"
         tableLayout <- if menuSettings.DefaultScatter then RandomScatter else StrictGrid
         lastChat <- ""
+        showRecentPlays <- false
         let players = GameEngine.createPlayers config
         cumulativeScores <- players |> List.map (fun p -> p.Name, 0) |> Map.ofList
         roundNumber <- 1
@@ -282,18 +285,35 @@ module CardImg =
         | Ten   -> "10" | Jack  -> "j"  | Queen -> "q"
         | King  -> "k"
 
-    /// Get the Nu asset for a card face image
+    /// Asset package holding a deck style's card images: the original deck
+    /// stays in Default, the screen-optimized one lives in Assets/Screen.
+    let package (style: Settings.CardStyle) =
+        match style with
+        | Settings.ScreenOptimized -> "Screen"
+        | Settings.Realistic -> "Default"
+
+    /// The deck style in use. The menu setting is copied into the game
+    /// config when a match starts and cannot change mid-match, so the menu
+    /// value is the live choice everywhere (menu decoration included).
+    let private pkg () = package AppState.menuSettings.CardStyle
+
+    /// Nu asset for a card face image in an explicit deck style.
+    let cardAssetOf (style: Settings.CardStyle) (card: Card) : Image AssetTag =
+        asset<Image> (package style) ($"{suitPrefix card.Suit}{rankSuffix card.Rank}")
+
+    /// Get the Nu asset for a card face image (in the selected deck style)
     let cardAsset (card: Card) : Image AssetTag =
-        asset<Image> "Default" ($"{suitPrefix card.Suit}{rankSuffix card.Rank}")
+        cardAssetOf AppState.menuSettings.CardStyle card
 
     /// Deck image for the current game (randomly chosen scenic design with
     /// stacked edges baked in) — used for the deck pile and deck icon only.
     let backAsset () : Image AssetTag =
-        asset<Image> "Default" AppState.currentBack
+        asset<Image> (pkg ()) AppState.currentBack
 
-    /// Plain single-card back for face-down hand cards (not the deck image).
-    let handBackAsset : Image AssetTag =
-        asset<Image> "Default" "back"
+    /// Plain single-card back for face-down hand cards, in the design chosen
+    /// for the game (handback1 goes with back1, …).
+    let handBackAsset () : Image AssetTag =
+        asset<Image> (pkg ()) ("hand" + AppState.currentBack)
 
     /// Table felt background image
     let tableBgAsset : Image AssetTag =
@@ -1055,7 +1075,8 @@ type KasinoDispatcher () =
             World.doStaticSprite ("MenuAce" + string i)
                 [Entity.Position .= v3 (off * 44.0f) (-100.0f - abs off * 7.0f) 0.0f
                  Entity.Size .= v3 48.0f 60.0f 0.0f
-                 Entity.StaticImage .= CardImg.cardAsset { Suit = suit; Rank = Ace }
+                 // always the original deck, whatever the card-style setting
+                 Entity.StaticImage .= CardImg.cardAssetOf Settings.Realistic { Suit = suit; Rank = Ace }
                  Entity.Rotation .= Quaternion.CreateFromAxisAngle (Vector3.UnitZ, rot)
                  Entity.Elevation .= 0.5f] world |> ignore
 
@@ -1174,6 +1195,24 @@ type KasinoDispatcher () =
              Entity.Visible @= isHumanCount
              Entity.Elevation .= 1.0f] world then
             AppState.menuSettings <- { AppState.menuSettings with StrictRules = not AppState.menuSettings.StrictRules }
+
+        if World.doButton "BtnToggleCards"
+            [Entity.Position .= v3 0.0f (Ly.menuBaseY - 5.0f * Ly.btnGap) 0.0f
+             Entity.Size .= v3 Ly.btnW Ly.btnH 0.0f
+             Entity.Text @= $"Card deck: {Settings.CardStyle.label AppState.menuSettings.CardStyle}"
+             Entity.Visible @= isHumanCount
+             Entity.Elevation .= 1.0f] world then
+            AppState.menuSettings <- { AppState.menuSettings with CardStyle = Settings.CardStyle.next AppState.menuSettings.CardStyle }
+
+        // Live preview of the selected deck (10 of diamonds and 2 of spades)
+        // to the right of the toggle column, shown with the toggles.
+        for i, card in List.indexed [ { Suit = Diamonds; Rank = Ten }; { Suit = Spades; Rank = Two } ] do
+            World.doStaticSprite ("MenuPreview" + string i)
+                [Entity.Position .= v3 (170.0f + float32 i * 52.0f) (Ly.menuBaseY - 3.0f * Ly.btnGap) 0.0f
+                 Entity.Size .= v3 Ly.cardW Ly.cardH 0.0f
+                 Entity.StaticImage @= CardImg.cardAsset card
+                 Entity.Visible @= isHumanCount
+                 Entity.Elevation .= 1.0f] world |> ignore
 
         // "How to Play" button on all menu steps
         if World.doButton "BtnRules"
@@ -1345,7 +1384,7 @@ type KasinoDispatcher () =
                     World.doStaticSprite name
                         [Entity.Position @= v3 x Ly.topOppY 0.0f
                          Entity.Size .= v3 Ly.cardW Ly.cardH 0.0f
-                         Entity.StaticImage @= (if isHuman then CardImg.handBackAsset else CardImg.cardAsset opp.Hand[i])
+                         Entity.StaticImage @= (if isHuman then CardImg.handBackAsset () else CardImg.cardAsset opp.Hand[i])
                          Entity.Visible @= true
                          Entity.Elevation .= 1.0f] world |> ignore
                 else
@@ -1381,7 +1420,7 @@ type KasinoDispatcher () =
                     World.doStaticSprite name
                         [Entity.Position @= v3 Ly.sideLeftX y 0.0f
                          Entity.Size .= v3 Ly.cardW Ly.cardH 0.0f
-                         Entity.StaticImage @= (if isHuman then CardImg.handBackAsset else CardImg.cardAsset opp2.Hand[i])
+                         Entity.StaticImage @= (if isHuman then CardImg.handBackAsset () else CardImg.cardAsset opp2.Hand[i])
                          Entity.Visible @= true
                          Entity.Elevation .= 1.0f] world |> ignore
                 else
@@ -1414,7 +1453,7 @@ type KasinoDispatcher () =
                     World.doStaticSprite name
                         [Entity.Position @= v3 Ly.sideRightX y 0.0f
                          Entity.Size .= v3 Ly.cardW Ly.cardH 0.0f
-                         Entity.StaticImage @= (if isHuman then CardImg.handBackAsset else CardImg.cardAsset opp3.Hand[i])
+                         Entity.StaticImage @= (if isHuman then CardImg.handBackAsset () else CardImg.cardAsset opp3.Hand[i])
                          Entity.Visible @= true
                          Entity.Elevation .= 1.0f] world |> ignore
                 else
@@ -1483,7 +1522,7 @@ type KasinoDispatcher () =
                     if isHuman || bottomIdx = gs.CurrentPlayerIndex then
                         CardImg.cardAsset card
                     else
-                        CardImg.handBackAsset
+                        CardImg.handBackAsset ()
                 World.doStaticSprite "DragCard"
                     [Entity.Position @= v3 curPos.X curPos.Y 0.0f
                      Entity.Size .= v3 Ly.cardW Ly.cardH 0.0f
@@ -1540,7 +1579,7 @@ type KasinoDispatcher () =
                 World.doStaticSprite name
                     [Entity.Position @= v3 xOff (Ly.tableY + yStack + interleaveY) 0.0f
                      Entity.Size .= v3 Ly.cardW Ly.cardH 0.0f
-                     Entity.StaticImage @= CardImg.handBackAsset
+                     Entity.StaticImage @= CardImg.handBackAsset ()
                      Entity.Rotation @= Quaternion.Identity
                      Entity.Visible @= true
                      Entity.Elevation @= (5.0f + float32 si * 0.01f)] world |> ignore
@@ -1567,7 +1606,7 @@ type KasinoDispatcher () =
                     World.doStaticSprite name
                         [Entity.Position @= v3 x y 0.0f
                          Entity.Size .= v3 Ly.cardW Ly.cardH 0.0f
-                         Entity.StaticImage @= CardImg.handBackAsset
+                         Entity.StaticImage @= CardImg.handBackAsset ()
                          Entity.Visible @= true
                          Entity.Elevation @= (5.2f + float32 dci * 0.01f)] world |> ignore
                 else
@@ -1686,9 +1725,10 @@ type KasinoDispatcher () =
             | RoundOver -> "Round over! [Enter] continue"
             | GameOver -> "Game over!"
 
+        // beside the hand (bottom-left), off the cards
         World.doText "TurnText"
-            [Entity.Position .= v3 0.0f Ly.turnTextY 0.0f
-             Entity.Size .= v3 550.0f 20.0f 0.0f
+            [Entity.Position .= v3 -215.0f Ly.handY 0.0f
+             Entity.Size .= v3 200.0f 20.0f 0.0f
              Entity.Text @= turnText
              Entity.Justification .= Justified (JustifyCenter, JustifyMiddle)
              Entity.TextColor .= Clr.gold
@@ -1755,9 +1795,9 @@ type KasinoDispatcher () =
         // ── "?" Help button (top-left, always declared, hidden during modal) ──
         let helpVisible = AppState.phase <> ChoosingCaptureOption
         if World.doButton "BtnHelp"
-            [Entity.Position .= v3 -305.0f 168.0f 0.0f
+            [Entity.Position .= v3 -75.0f 168.0f 0.0f
              Entity.Size .= v3 40.0f 24.0f 0.0f
-             Entity.Text .= "?"
+             Entity.Text .= "i"
              Entity.Visible @= helpVisible
              Entity.Elevation .= 4.0f] world then
             if helpVisible then
@@ -1792,6 +1832,42 @@ type KasinoDispatcher () =
             if helpVisible then
                 AppState.resetMenu ()
                 game.SetKasinoMode KasinoMenu world
+
+        // ── "Last moves" toggle (top-left, next to Menu): a popup over the top
+        // of the table lists what the other seats did since your play ──
+        // A press anywhere outside the "?" button closes the panel; the button's
+        // own click (which Nu fires on release) toggles it, so its area is
+        // excluded here or the press would close and the release reopen.
+        if AppState.showRecentPlays && World.isMouseButtonPressed MouseLeft world then
+            let m = World.getMousePosition2dWorld false world
+            let onButton = abs (m.X + 305.0f) <= 20.0f && abs (m.Y - 168.0f) <= 12.0f
+            if not onButton then AppState.showRecentPlays <- false
+        if World.doButton "BtnRecent"
+            [Entity.Position .= v3 -305.0f 168.0f 0.0f
+             Entity.Size .= v3 40.0f 24.0f 0.0f
+             Entity.Text .= "?"
+             Entity.Visible @= helpVisible
+             Entity.Elevation .= 4.0f] world then
+            if helpVisible then
+                AppState.showRecentPlays <- not AppState.showRecentPlays
+        let recent = if AppState.showRecentPlays && helpVisible then GameEngine.describeRecentPlays gs else []
+        World.doStaticSprite "RecentBg"
+            [Entity.Position .= v3 0.0f 40.0f 0.0f
+             Entity.Size @= v3 420.0f (float32 recent.Length * 16.0f + 10.0f) 0.0f
+             Entity.StaticImage .= Assets.Default.White
+             Entity.Color .= color 0.0f 0.0f 0.0f 0.9f
+             Entity.Visible @= not (List.isEmpty recent)
+             Entity.Elevation .= 6.0f] world |> ignore
+        for i in 0 .. 2 do
+            World.doText ("RecentLine" + string i)
+                [Entity.Position @= v3 0.0f (40.0f + float32 (recent.Length - 1) * 8.0f - float32 i * 16.0f) 0.0f
+                 Entity.Size .= v3 410.0f 16.0f 0.0f
+                 Entity.Text @= (List.tryItem i recent |> Option.defaultValue "")
+                 Entity.Visible @= (i < recent.Length)
+                 Entity.Justification .= Justified (JustifyLeft, JustifyMiddle)
+                 Entity.TextColor .= Clr.gold
+                 Entity.FontSizing .= Some 11.0f
+                 Entity.Elevation .= 7.0f] world
 
         // ── "Play Card" button (always declared) ──────────────
         let notDragging = match AppState.dragState with NotDragging -> true | Dragging _ | DraggingTable _ -> false

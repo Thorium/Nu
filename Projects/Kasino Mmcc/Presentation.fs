@@ -27,18 +27,31 @@ module CardImg =
         | Ten   -> "10" | Jack  -> "j"  | Queen -> "q"
         | King  -> "k"
 
-    /// Nu asset for a card face image.
+    /// Asset package holding a deck style's card images: the original deck
+    /// stays in Default, the screen-optimized one lives in Assets/Screen.
+    let package (style: Settings.CardStyle) =
+        match style with
+        | Settings.ScreenOptimized -> "Screen"
+        | Settings.Realistic -> "Default"
+
+    /// Nu asset for a card face image in the given deck style.
+    let cardAssetOf (style: Settings.CardStyle) (card: Card) : Image AssetTag =
+        asset<Image> (package style) ($"{suitPrefix card.Suit}{rankSuffix card.Rank}")
+
+    /// Card face in the default deck style (splash art and tutorial pages,
+    /// which have no settings in scope).
     let cardAsset (card: Card) : Image AssetTag =
-        asset<Image> "Default" ($"{suitPrefix card.Suit}{rankSuffix card.Rank}")
+        cardAssetOf Settings.defaultSettings.CardStyle card
 
     /// Deck image (scenic design with stacked edges baked in, chosen per-game,
-    /// e.g. "back1") — used for the deck pile and deck icon only.
-    let backAsset (backName: string) : Image AssetTag =
-        asset<Image> "Default" backName
+    /// e.g. "back1") in the given style — used for the deck pile and deck icon only.
+    let backAssetOf (style: Settings.CardStyle) (backName: string) : Image AssetTag =
+        asset<Image> (package style) backName
 
-    /// Plain single-card back for face-down hand cards (not the deck image).
-    let handBackAsset : Image AssetTag =
-        asset<Image> "Default" "back"
+    /// Plain single-card back for face-down hand cards, in the design chosen
+    /// for the game ("handback1" goes with "back1", …).
+    let handBackAssetOf (style: Settings.CardStyle) (backName: string) : Image AssetTag =
+        asset<Image> (package style) ("hand" + backName)
 
 // ─── Layout Constants ─────────────────────────────────────────────────
 // Nu virtual resolution is 640×360 → visible range ±320 (X) × ±180 (Y)
