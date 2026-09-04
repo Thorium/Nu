@@ -1776,17 +1776,20 @@ type KasinoDispatcher () =
              Entity.Elevation .= 3.0f] world
 
         // Small deck card-back with count
+        // hidden once the last wave has been drawn (nothing left to draw)
+        let deckLeft = not (List.isEmpty gs.Deck)
         World.doStaticSprite "DeckIcon"
             [Entity.Position .= v3 Ly.scoreX (infoY - 18.0f) 0.0f
              Entity.Size .= v3 (Ly.cardW * 0.5f) (Ly.cardH * 0.5f) 0.0f
              Entity.StaticImage .= CardImg.backAsset ()
-             Entity.Visible .= true
+             Entity.Visible @= deckLeft
              Entity.Elevation .= 3.0f] world |> ignore
 
         World.doText "DeckCount"
             [Entity.Position .= v3 (Ly.scoreX + 24.0f) (infoY - 18.0f) 0.0f
              Entity.Size .= v3 60.0f 18.0f 0.0f
              Entity.Text @= $"{List.length gs.Deck}"
+             Entity.Visible @= deckLeft
              Entity.TextColor .= Clr.lightGray
              Entity.Justification .= Justified (JustifyLeft, JustifyMiddle)
              Entity.FontSizing .= Some 12.0f
@@ -1853,20 +1856,20 @@ type KasinoDispatcher () =
         let recent = if AppState.showRecentPlays && helpVisible then GameEngine.describeRecentPlays gs else []
         World.doStaticSprite "RecentBg"
             [Entity.Position .= v3 0.0f 40.0f 0.0f
-             Entity.Size @= v3 420.0f (float32 recent.Length * 16.0f + 10.0f) 0.0f
+             Entity.Size @= v3 540.0f (float32 recent.Length * 21.0f + 12.0f) 0.0f
              Entity.StaticImage .= Assets.Default.White
              Entity.Color .= color 0.0f 0.0f 0.0f 0.9f
              Entity.Visible @= not (List.isEmpty recent)
              Entity.Elevation .= 6.0f] world |> ignore
         for i in 0 .. 2 do
             World.doText ("RecentLine" + string i)
-                [Entity.Position @= v3 0.0f (40.0f + float32 (recent.Length - 1) * 8.0f - float32 i * 16.0f) 0.0f
-                 Entity.Size .= v3 410.0f 16.0f 0.0f
+                [Entity.Position @= v3 0.0f (40.0f + float32 (recent.Length - 1) * 10.5f - float32 i * 21.0f) 0.0f
+                 Entity.Size .= v3 530.0f 21.0f 0.0f
                  Entity.Text @= (List.tryItem i recent |> Option.defaultValue "")
                  Entity.Visible @= (i < recent.Length)
                  Entity.Justification .= Justified (JustifyLeft, JustifyMiddle)
                  Entity.TextColor .= Clr.gold
-                 Entity.FontSizing .= Some 11.0f
+                 Entity.FontSizing .= Some 14.0f
                  Entity.Elevation .= 7.0f] world
 
         // ── "Play Card" button (always declared) ──────────────

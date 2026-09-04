@@ -1074,18 +1074,18 @@ type GameplayDispatcher () =
                     let recent = GameEngine.describeRecentPlays gameplay.State
                     Content.staticSprite "RecentBg"
                         [Entity.Position == v3 0.0f 40.0f 0.0f
-                         Entity.Size := v3 420.0f (float32 recent.Length * 16.0f + 10.0f) 0.0f
+                         Entity.Size := v3 540.0f (float32 recent.Length * 21.0f + 12.0f) 0.0f
                          Entity.StaticImage == Assets.Default.White
                          Entity.Color == color 0.0f 0.0f 0.0f 0.9f
                          Entity.Elevation == 6.0f]
                     for i, line in List.indexed recent do
                         Content.text ("RecentLine" + string i)
-                            [Entity.Position := v3 0.0f (40.0f + float32 (recent.Length - 1) * 8.0f - float32 i * 16.0f) 0.0f
-                             Entity.Size == v3 410.0f 16.0f 0.0f
+                            [Entity.Position := v3 0.0f (40.0f + float32 (recent.Length - 1) * 10.5f - float32 i * 21.0f) 0.0f
+                             Entity.Size == v3 530.0f 21.0f 0.0f
                              Entity.Text := line
                              Entity.Justification == Justified (JustifyLeft, JustifyMiddle)
                              Entity.TextColor == Clr.gold
-                             Entity.FontSizing == Some 11.0f
+                             Entity.FontSizing == Some 14.0f
                              Entity.Elevation == 7.0f]
                 Content.button "HelpBtn"
                     [Entity.Position == v3 170.0f 165.0f 0.0f
