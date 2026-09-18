@@ -97,9 +97,12 @@ module FsHockeyExtensions =
 // Game: top-left origin (0,0), X right, Y down, ~320x200 field + HUD
 // Nu: center origin (0,0), X right, Y up
 module Coords =
+    [<Literal>]
     let scale = 1.5f
+    [<Literal>]
     let gameW = 320.0f
     /// 200 field + 48 HUD
+    [<Literal>]
     let gameH = 248.0f
     let halfW = gameW / 2.0f
     let halfH = gameH / 2.0f
@@ -163,6 +166,7 @@ module Simulants =
 // ─── Input Helpers ────────────────────────────────────────────────────
 module HockeyInput =
 
+    [<Literal>]
     let GamepadDeadzone = 0.35f
 
     /// Read pad `idx` as an Input snapshot (all-false when not connected).

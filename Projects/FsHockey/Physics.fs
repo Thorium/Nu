@@ -106,9 +106,11 @@ let teamStrength =
        0.95 |] // 9  EARTH
 
 /// "Human player fast" toggle copies Moon Minerals stats (team 8)
+[<Literal>]
 let humanFastTeamIdx = 8
 
 /// Hard mode: CPU speed multiplier (applied to MaxSpeed and ShotPower)
+[<Literal>]
 let HardModeSpeedMult = 1.3
 
 /// Acceleration is role-based, NOT team-based (static data)
@@ -119,11 +121,13 @@ let ForwardAccel = 2.0<subpx / tick>
 let GoalieMaxSpeed = 12.0<subpx / tick>
 
 let PuckMaxSpeed = 16.0<subpx / tick>
+[<Literal>]
 let PuckAnimFrames = 8
 
 // ─── Shoot / Pass Charge ──────────────────────────────────────────────
 // Hold fire key longer for a harder shot. Quick tap = pass (weaker).
 
+[<Literal>]
 let PassPowerFraction = 0.4
 let ChargeTicksForFull = 18<tick>
 
@@ -143,6 +147,7 @@ let CollisionDist = 8.0<px>
 // ─── Ice Trail (skate marks) ──────────────────────────────────────────
 
 /// Maximum number of skate marks stored at once
+[<Literal>]
 let MaxTrailMarks = 120
 /// Ticks before a skate mark fades away
 let TrailMarkLifetime = 90<tick>
@@ -155,6 +160,7 @@ let StalemateFaceoff = 500<tick>
 // ─── AI Constants ──────────────────────────────────────────────────────
 
 let AiShootZoneX = 69.0<px>
+[<Literal>]
 let AiRandomShot = 8.0
 
 /// Minimum distance before same-team players start repelling each other
@@ -174,6 +180,7 @@ let AiMateOpenDist = 24.0<px>
 let AiPassMinDist = 24.0<px>
 let AiPassMaxDist = 130.0<px>
 /// Puck speed fraction for an AI pass (between tap-pass and full shot)
+[<Literal>]
 let AiPassPowerFraction = 0.6
 /// Forced shot when the possession timer runs this low (the timer starts
 /// at PossessionTimer and force-releases at 0; shoot just before that)
@@ -200,6 +207,7 @@ let AiActiveSwitchMargin = 42.0<px>
 
 /// Top-speed fraction for non-active players drifting back to their base
 /// position while the puck is loose (nobody owns it) — no need to sprint
+[<Literal>]
 let AiReturnSpeedFrac = 0.55
 
 /// Skaters bounce off a goalie's body instead of skating through it
