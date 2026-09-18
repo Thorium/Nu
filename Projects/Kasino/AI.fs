@@ -85,7 +85,7 @@ module AI =
     // ── Public API ──────────────────────────────────────────
 
     /// Evaluate playing a single hand card (static scoring).
-    let evaluatePlay (handCard: Card) (tableCards: Card list) : PlayEvaluation =
+    let evaluatePlay (tableCards: Card list) (handCard: Card) : PlayEvaluation =
         let options = Rules.findCaptureOptions handCard tableCards
         match options with
         | [] ->
@@ -121,7 +121,7 @@ module AI =
 
     /// Evaluate all hand cards (static, for display).
     let evaluateAllPlays (hand: Card list) (tableCards: Card list) =
-        hand |> List.map (fun c -> evaluatePlay c tableCards)
+        hand |> List.map (evaluatePlay tableCards)
 
     /// Choose best card for Standard Kasino (maximize points).
     let chooseBestStandard (ctx: GameContext) (hand: Card list) (tableCards: Card list) =
