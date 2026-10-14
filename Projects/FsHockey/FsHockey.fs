@@ -122,14 +122,61 @@ module Coords =
     /// Position from raw float screen coords (for HUD/menus)
     let inline screenPos (x: float32) (y: float32) = v3 ((x - halfW) * scale) (-(y - halfH) * scale) 0.0f
 
+// ─── Team colours by side and speed class ────────────────────────────
+// The left team (team 1) wears red / orange / red-purple and the right team
+// (team 2) blue / yellow / green, fastest to slowest: the jersey tells how
+// quick a team is, and the two sides never share a colour. The purple is
+// tinted towards red to stay clear of the right side's blue; the green is
+// dark enough not to hide the active-player marker.
+
+[<Struct>]
+type SpeedClass =
+    | Fast
+    | Medium
+    | Slow
+
+module TeamColors =
+
+    /// Fast, medium and slow jersey colours of the left team.
+    let private team1 = struct (color8 220uy 60uy 60uy 255uy, color8 225uy 105uy 10uy 255uy, color8 190uy 80uy 160uy 255uy)
+    /// Fast, medium and slow jersey colours of the right team.
+    let private team2 = struct (color8 60uy 100uy 220uy 255uy, color8 255uy 205uy 0uy 255uy, color8 30uy 130uy 60uy 255uy)
+
+    // Speed classes come from the CPU teams' skating speeds as the menu shows
+    // them under the current settings: the fastest CPU value is Fast, the
+    // slowest Slow, anything between Medium. Hard mode speeds every CPU team up
+    // alike, so CPU classes never change — but the human team is placed against
+    // those speeds, so in hard mode the fast human drops to Medium.
+
+    /// Slowest and fastest CPU team speed, without and with hard mode.
+    let private cpuSpeedRanges =
+        [| false; true |]
+        |> Array.map (fun hardMode ->
+            let speeds = Array.init (NumTeams - 1) (fun i -> displayedTeamSpeed false hardMode (i + 1))
+            struct (Array.min speeds, Array.max speeds))
+
+    /// Speed class of a team under the fast-human and hard-mode settings.
+    let speedClass (fastHuman: bool) (hardMode: bool) (teamIdx: int) =
+        let struct (slowest, fastest) = cpuSpeedRanges[if hardMode then 1 else 0]
+        let v = displayedTeamSpeed fastHuman hardMode teamIdx
+        if v >= fastest then Fast
+        elif v <= slowest then Slow
+        else Medium
+
+    /// Jersey colour of a team playing on the left (team 1) or right (team 2).
+    let teamColor (rightSide: bool) (fastHuman: bool) (hardMode: bool) (teamIdx: int) =
+        let struct (fast, medium, slow) = if rightSide then team2 else team1
+        match speedClass fastHuman hardMode teamIdx with
+        | Fast -> fast
+        | Medium -> medium
+        | Slow -> slow
+
 // ─── Colors (CGA-inspired) ────────────────────────────────────────────
 module Colors =
     let ice = color 0.784f 0.863f 0.941f 1.0f
     let board = color 0.235f 0.314f 0.471f 1.0f
     let red = color 0.706f 0.157f 0.157f 1.0f
     let blue = color 0.157f 0.314f 0.706f 1.0f
-    let team1 = color 0.863f 0.235f 0.235f 1.0f
-    let team2 = color 0.235f 0.392f 0.863f 1.0f
     let puck = color 0.078f 0.078f 0.078f 1.0f
     let hudBg = color 0.078f 0.078f 0.157f 1.0f
     let hudText = color 0.863f 0.863f 0.863f 1.0f
@@ -229,7 +276,8 @@ module Draw =
              Entity.Color .= c
              Entity.Elevation .= -1.0f] world |> ignore
 
-    let rink world =
+    /// `leftGoal` / `rightGoal`: the two teams' colours, for the goal nets.
+    let rink (leftGoal: Color) (rightGoal: Color) world =
 
         // Ice surface
         let iceW = float32 (stripPx FieldRight - stripPx FieldLeft) + 8.0f
@@ -269,13 +317,13 @@ module Draw =
             [Entity.Position .= Coords.screenPos (fl - gd / 2.0f) ((gt + gb) / 2.0f)
              Entity.Size .= Coords.nuSize gd (gb - gt)
              Entity.StaticImage .= Assets.Default.White
-             Entity.Color .= color 0.863f 0.235f 0.235f 0.3f
+             Entity.Color @= leftGoal.WithA 0.3f // team colour, per match
              Entity.Elevation .= 0.1f] world |> ignore
         World.doStaticSprite "GoalRight"
             [Entity.Position .= Coords.screenPos (fr + gd / 2.0f) ((gt + gb) / 2.0f)
              Entity.Size .= Coords.nuSize gd (gb - gt)
              Entity.StaticImage .= Assets.Default.White
-             Entity.Color .= color 0.235f 0.392f 0.863f 0.3f
+             Entity.Color @= rightGoal.WithA 0.3f
              Entity.Elevation .= 0.1f] world |> ignore
 
         // Center line + dot
@@ -342,7 +390,7 @@ module Draw =
                  Entity.Size .= size
                  Entity.Degrees @= rot
                  Entity.StaticImage .= Assets.Default.White
-                 Entity.Color .= c
+                 Entity.Color @= c // per match: team colour, goalie pads
                  Entity.Elevation .= elevation] world |> ignore
 
         part "Hlm" (rpos 0.0f (4.5f * us)) (Coords.nuSize (3.0f * u) (2.0f * u)) helmetColor 1.15f
@@ -384,7 +432,7 @@ module Draw =
                  Entity.Color .= Colors.activeMarker
                  Entity.Elevation .= 1.2f] world |> ignore
 
-    let hud (m: Match) world =
+    let hud (m: Match) (team1Color: Color) (team2Color: Color) world =
         let hudY = float32 (stripPx FieldBottom) + 10.0f
 
         World.doStaticSprite "HudBg"
@@ -400,15 +448,15 @@ module Draw =
                   Entity.Size .= size
                   Entity.Text @= text
                   Entity.Justification .= Justified (justify, JustifyMiddle)
-                  Entity.TextColor .= c
+                  Entity.TextColor @= c // team colours change per match
                   Entity.Elevation .= 3.0f]
                  @ (match fontSizing with Some fs -> [Entity.FontSizing .= Some fs] | None -> []))
                 world
 
-        hudText "HudT1Name" (Coords.screenPos 30.0f (hudY + 8.0f)) (Coords.nuSize 100.0f 14.0f) teamNames[m.Team1Idx] JustifyLeft Colors.team1 (Some 8.0f)
-        hudText "HudT1Score" (Coords.screenPos 30.0f (hudY + 22.0f)) (Coords.nuSize 60.0f 20.0f) $"{m.Team1Score}" JustifyLeft Colors.team1 None
-        hudText "HudT2Name" (Coords.screenPos 280.0f (hudY + 8.0f)) (Coords.nuSize 100.0f 14.0f) teamNames[m.Team2Idx] JustifyRight Colors.team2 (Some 8.0f)
-        hudText "HudT2Score" (Coords.screenPos 280.0f (hudY + 22.0f)) (Coords.nuSize 60.0f 20.0f) $"{m.Team2Score}" JustifyRight Colors.team2 None
+        hudText "HudT1Name" (Coords.screenPos 30.0f (hudY + 8.0f)) (Coords.nuSize 100.0f 14.0f) teamNames[m.Team1Idx] JustifyLeft team1Color (Some 8.0f)
+        hudText "HudT1Score" (Coords.screenPos 30.0f (hudY + 22.0f)) (Coords.nuSize 60.0f 20.0f) $"{m.Team1Score}" JustifyLeft team1Color None
+        hudText "HudT2Name" (Coords.screenPos 280.0f (hudY + 8.0f)) (Coords.nuSize 100.0f 14.0f) teamNames[m.Team2Idx] JustifyRight team2Color (Some 8.0f)
+        hudText "HudT2Score" (Coords.screenPos 280.0f (hudY + 22.0f)) (Coords.nuSize 60.0f 20.0f) $"{m.Team2Score}" JustifyRight team2Color None
 
         // clock counts DOWN to the period end
         let secs = max 0 (int m.PeriodLength - int m.ClockSeconds)
@@ -457,8 +505,14 @@ type GameplayDispatcher () =
             // declare the scene from the immutable match state
             World.beginGroup "Scene" [] world
 
+            // Team colours from the menu settings the match was created with
+            // (they can't change during a match)
+            let settings = Game.GetSettings world
+            let team1Color = TeamColors.teamColor false settings.FastHuman settings.HardMode m.Team1Idx
+            let team2Color = TeamColors.teamColor true settings.FastHuman settings.HardMode m.Team2Idx
+
             Draw.background "GameBg" (color 0.118f 0.118f 0.196f 1.0f) world
-            Draw.rink world
+            Draw.rink team1Color team2Color world
 
             // trail marks
             for i in 0 .. m.TrailMarkCount - 1 do
@@ -493,14 +547,14 @@ type GameplayDispatcher () =
             let t2Helmet = if m.Team2Idx = 0 then Colors.helmetGold else Colors.helmetBlack
             for i in 0 .. m.PlayersPerTeam - 1 do
                 let isGoalie = m.FivePlayerMode && i = 0
-                Draw.player $"P1_{i}" m.Entities[i] Colors.team1 t1Helmet (i = m.ActivePlayer1) isGoalie m.StickAnimTimers[i] frameTime world
+                Draw.player $"P1_{i}" m.Entities[i] team1Color t1Helmet (i = m.ActivePlayer1) isGoalie m.StickAnimTimers[i] frameTime world
             for i in 0 .. m.PlayersPerTeam - 1 do
                 let ei = m.Team2Start + i
                 let isGoalie = m.FivePlayerMode && i = 0
-                Draw.player $"P2_{i}" m.Entities[ei] Colors.team2 t2Helmet (ei = m.ActivePlayer2) isGoalie m.StickAnimTimers[ei] frameTime world
+                Draw.player $"P2_{i}" m.Entities[ei] team2Color t2Helmet (ei = m.ActivePlayer2) isGoalie m.StickAnimTimers[ei] frameTime world
 
             // HUD
-            Draw.hud m world
+            Draw.hud m team1Color team2Color world
 
             // goal flash overlay: a calm fade-out, not a strobe (the old
             // 5-tick alpha alternation flashed the whole screen at ~6 Hz)
@@ -702,14 +756,14 @@ type FsHockeyDispatcher () =
             [Entity.Position .= Coords.screenPos 110.0f (listBaseY - 4.0f)
              Entity.Size .= Coords.nuSize 110.0f 12.0f
              Entity.Text .= "TEAM 1 (LEFT)"
-             Entity.TextColor @= (if settings.ActiveColumn = 0 then Colors.team1 else Colors.gray)
+             Entity.TextColor @= (if settings.ActiveColumn = 0 then TeamColors.teamColor false settings.FastHuman settings.HardMode settings.SelectedTeam1 else Colors.gray)
              Entity.Justification .= Justified (JustifyLeft, JustifyMiddle)
              Entity.Elevation .= 1.0f] world
         World.doText "Col2Header"
             [Entity.Position .= Coords.screenPos 270.0f (listBaseY - 4.0f)
              Entity.Size .= Coords.nuSize 110.0f 12.0f
              Entity.Text .= "TEAM 2 (RIGHT)"
-             Entity.TextColor @= (if settings.ActiveColumn = 1 then Colors.team2 else Colors.gray)
+             Entity.TextColor @= (if settings.ActiveColumn = 1 then TeamColors.teamColor true settings.FastHuman settings.HardMode settings.SelectedTeam2 else Colors.gray)
              Entity.Justification .= Justified (JustifyLeft, JustifyMiddle)
              Entity.Elevation .= 1.0f] world
 
@@ -896,6 +950,17 @@ type FsHockeyDispatcher () =
         (match game.GetLeague world with
          | Some league ->
             let t1, t2 = currentMatchup league
+            let settings = game.GetSettings world
+            // Each team's skating speed, dimmed under its name as in the menu
+            let speedLine name y teamIdx =
+                World.doText name
+                    [Entity.Position .= v3 0.0f y 0.0f
+                     Entity.Size .= v3 300.0f 16.0f 0.0f
+                     Entity.Text @= $"(speed {displayedTeamSpeed settings.FastHuman settings.HardMode teamIdx})"
+                     Entity.Justification .= Justified (JustifyCenter, JustifyMiddle)
+                     Entity.TextColor .= Colors.dim
+                     Entity.FontSizing .= Some 8.0f
+                     Entity.Elevation .= 1.0f] world
             World.doText "MatchupTitle"
                 [Entity.Position .= v3 0.0f 120.0f 0.0f
                  Entity.Size .= v3 300.0f 32.0f 0.0f
@@ -915,8 +980,9 @@ type FsHockeyDispatcher () =
                  Entity.Size .= v3 300.0f 32.0f 0.0f
                  Entity.Text @= teamNames[t1]
                  Entity.Justification .= Justified (JustifyCenter, JustifyMiddle)
-                 Entity.TextColor .= Colors.team1
+                 Entity.TextColor @= TeamColors.teamColor false settings.FastHuman settings.HardMode t1
                  Entity.Elevation .= 1.0f] world
+            speedLine "MatchupT1Speed" 14.0f t1
             World.doText "MatchupVs"
                 [Entity.Position .= v3 0.0f 0.0f 0.0f
                  Entity.Text .= "vs"
@@ -928,8 +994,9 @@ type FsHockeyDispatcher () =
                  Entity.Size .= v3 300.0f 32.0f 0.0f
                  Entity.Text @= teamNames[t2]
                  Entity.Justification .= Justified (JustifyCenter, JustifyMiddle)
-                 Entity.TextColor .= Colors.team2
+                 Entity.TextColor @= TeamColors.teamColor true settings.FastHuman settings.HardMode t2
                  Entity.Elevation .= 1.0f] world
+            speedLine "MatchupT2Speed" -46.0f t2
 
             if World.doButton "StartMatch"
                 [Entity.Position .= v3 0.0f -100.0f 0.0f
