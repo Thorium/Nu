@@ -192,6 +192,13 @@ module Colors =
     let darkBg = color 0.039f 0.039f 0.118f 1.0f
     let rowBg = color 0.09f 0.09f 0.2f 1.0f
     let rowSelBg = color 0.157f 0.235f 0.392f 1.0f
+    /// menu action buttons: EXHIBITION blue, LEAGUE gold, dark ink on both
+    let exhibitionBg = color 0.549f 0.722f 1.0f 1.0f
+    let leagueGold = color 1.0f 0.863f 0.314f 1.0f
+    let actionInk = color 0.063f 0.094f 0.188f 1.0f
+    /// option buttons: blue text when the option is on
+    let optionBg = color 0.149f 0.149f 0.227f 1.0f
+    let optionOn = color 0.565f 0.753f 1.0f 1.0f
     let skin = color 0.902f 0.765f 0.627f 1.0f
     let trousers = color 0.118f 0.118f 0.118f 1.0f
     let skate = color 0.314f 0.314f 0.314f 1.0f
@@ -719,8 +726,20 @@ type FsHockeyDispatcher () =
 
     override this.Process (game, world) =
 
+        // No Sticky Keys dialog from five presses of player 1's RShift:
+        // Windows' accessibility shortcuts are off while the game window is
+        // in front. The faceoff icon goes on the window once it exists.
+        ShortcutKeys.sync ()
+        WindowIcon.trySet ()
+
         let mode = game.GetHockeyMode world
         let behavior = Dissolve (Constants.Dissolve.Default, None)
+
+        // Every screen's code runs each frame, selected or not, so a key
+        // shortcut only counts on its own screen: Enter is also player 1's
+        // shoot key and Escape the in-match quit. `mode` is this frame's, so a
+        // key that switches screens isn't handled again by the next one.
+        let pressedOn screenMode key = mode = screenMode && World.isKeyboardKeyPressed key world
 
         // ─── MENU SCREEN ───────────────────────────────────────────
         World.beginScreen Simulants.Menu.Name (mode = HockeyMenu) behavior [] world |> ignore
@@ -792,7 +811,7 @@ type FsHockeyDispatcher () =
             World.doText $"{name}Spd"
                 [Entity.Position .= Coords.screenPos x (ty + 6.0f)
                  Entity.Size .= Coords.nuSize 106.0f (rowH - 1.0f)
-                 Entity.Text @= $"({speed})"
+                 Entity.Text @= $"speed {speed}"
                  Entity.TextColor .= Colors.dim
                  Entity.FontSizing .= Some 9.0f
                  Entity.Justification .= Justified (JustifyRight, JustifyMiddle)
@@ -818,60 +837,67 @@ type FsHockeyDispatcher () =
             if teamRow $"T2Row{i}" 270.0f ty sel2 $"""{(if sel2 then "> " else "  ")}{teamNames[i]}""" spd then
                 game.Settings.Map (fun s -> { s with SelectedTeam2 = i; ActiveColumn = 1 }) world
 
-        // toggles: buttons whose labels show the current immutable settings
-        let toggle name x (text: string) (f: MenuSettings -> MenuSettings) =
-            if World.doButton name
-                [Entity.Position .= Coords.screenPos x 172.0f
-                 Entity.Size .= Coords.nuSize 74.0f 13.0f
+        // a tinted button: ButtonFacet renders its image untinted, so the colour
+        // comes from a sprite under the label, with an invisible (EmptyImage)
+        // button of the same rect providing the click area
+        let tintedButton name x y w h (text: string) (bg: Color) (ink: Color) fontSize =
+            World.doStaticSprite $"{name}Bg"
+                [Entity.Position .= Coords.screenPos x y
+                 Entity.Size .= Coords.nuSize w h
+                 Entity.StaticImage .= Assets.Default.White
+                 Entity.Color @= bg
+                 Entity.Elevation .= 0.5f] world |> ignore
+            World.doText $"{name}Txt"
+                [Entity.Position .= Coords.screenPos x y
+                 Entity.Size .= Coords.nuSize w h
                  Entity.Text @= text
-                 Entity.TextColor .= Colors.buttonText
-                 Entity.FontSizing .= Some 8.0f
+                 Entity.TextColor @= ink
+                 Entity.FontSizing .= Some fontSize
+                 Entity.Justification .= Justified (JustifyCenter, JustifyMiddle)
                  Entity.Elevation .= 1.0f] world
-               && ready then
-                game.Settings.Map f world
+            World.doButton name
+                [Entity.Position .= Coords.screenPos x y
+                 Entity.Size .= Coords.nuSize w h
+                 Entity.UpImage .= Assets.Default.EmptyImage
+                 Entity.DownImage .= Assets.Default.EmptyImage
+                 Entity.Elevation .= 1.1f] world
 
-        toggle "FastToggle" 60.0f $"""(F)ast Human {(if settings.FastHuman then "ON" else "OFF")}""" (fun s -> { s with FastHuman = not s.FastHuman })
-        toggle "HardToggle" 140.0f $"""(H)ard Mode {(if settings.HardMode then "ON" else "OFF")}""" (fun s -> { s with HardMode = not s.HardMode })
-        toggle "FiveToggle" 220.0f $"""(5) Players {(if settings.FivePlayer then "6v6" else "3v3")}""" (fun s -> { s with FivePlayer = not s.FivePlayer })
-        toggle "PadToggle" 300.0f $"""(G)amepad {(if settings.GamepadEnabled then "ON" else "OFF")}""" (fun s -> { s with GamepadEnabled = not s.GamepadEnabled })
-
-        // main actions, handled inline
-        if (World.doButton "StartGame"
-                [Entity.Position .= Coords.screenPos 100.0f 188.0f
-                 Entity.Size .= Coords.nuSize 110.0f 14.0f
-                 Entity.Text .= "START GAME"
-                 Entity.TextColor .= Colors.buttonText
-                 Entity.FontSizing .= Some 10.0f
-                 Entity.Elevation .= 1.0f] world
-            || World.isKeyboardKeyPressed KeyboardKey.Enter world)
+        // main actions, handled inline: EXHIBITION blue, LEAGUE gold
+        if (tintedButton "StartGame" 100.0f 172.0f 110.0f 14.0f "EXHIBITION   Enter" Colors.exhibitionBg Colors.actionInk 10.0f
+            || pressedOn HockeyMenu KeyboardKey.Enter)
            && ready then
             FsHockeyDispatcher.StartExhibition game world
 
-        if (World.doButton "PlayLeague"
-                [Entity.Position .= Coords.screenPos 220.0f 188.0f
-                 Entity.Size .= Coords.nuSize 110.0f 14.0f
-                 Entity.Text .= "PLAY LEAGUE"
-                 Entity.TextColor .= Colors.buttonText
-                 Entity.FontSizing .= Some 10.0f
-                 Entity.Elevation .= 1.0f] world
-            || World.isKeyboardKeyPressed KeyboardKey.L world)
+        if (tintedButton "PlayLeague" 220.0f 172.0f 110.0f 14.0f "LEAGUE   L" Colors.leagueGold Colors.actionInk 10.0f
+            || pressedOn HockeyMenu KeyboardKey.L)
            && ready then
             game.SetLeague (Some (createLeague settings.SelectedTeam1 (FsHockeyDispatcher.FreshSeed world))) world
             game.SetHockeyMode HockeyLeagueMatchup world
 
+        // options: blue text while on, each with its key
+        let toggle name x (text: string) on (f: MenuSettings -> MenuSettings) =
+            if tintedButton name x 188.0f 74.0f 12.0f text Colors.optionBg (if on then Colors.optionOn else Colors.gray) 8.0f
+               && ready then
+                game.Settings.Map f world
+
+        toggle "FiveToggle" 75.0f $"""{(if settings.FivePlayer then "6 v 6" else "3 v 3")}   5""" true (fun s -> { s with FivePlayer = not s.FivePlayer })
+        toggle "FastToggle" 155.0f "Fast human   F" settings.FastHuman (fun s -> { s with FastHuman = not s.FastHuman })
+        toggle "HardToggle" 235.0f "Hard CPU   H" settings.HardMode (fun s -> { s with HardMode = not s.HardMode })
+        toggle "PadToggle" 315.0f "Gamepads   G" settings.GamepadEnabled (fun s -> { s with GamepadEnabled = not s.GamepadEnabled })
+
         if (World.doButton "ExitGame"
-                [Entity.Position .= Coords.screenPos 330.0f 188.0f
-                 Entity.Size .= Coords.nuSize 50.0f 14.0f
+                [Entity.Position .= Coords.screenPos 305.0f 172.0f
+                 Entity.Size .= Coords.nuSize 40.0f 14.0f
                  Entity.Text .= "EXIT"
                  Entity.TextColor .= Colors.buttonText
-                 Entity.FontSizing .= Some 10.0f
+                 Entity.FontSizing .= Some 9.0f
                  Entity.Elevation .= 1.0f] world
-            || World.isKeyboardKeyPressed KeyboardKey.Escape world)
+            || pressedOn HockeyMenu KeyboardKey.Escape)
            && ready && world.Unaccompanied then
             World.exit world
 
         // keyboard team selection (same immutable updates as the buttons)
-        if world.Advancing && ready then
+        if world.Advancing && ready && mode = HockeyMenu then
             if World.isKeyboardKeyPressed KeyboardKey.Tab world then
                 game.Settings.Map (fun s -> { s with ActiveColumn = 1 - s.ActiveColumn }) world
             if World.isKeyboardKeyPressed KeyboardKey.Up world then
@@ -893,15 +919,15 @@ type FsHockeyDispatcher () =
             if World.isKeyboardKeyPressed KeyboardKey.G world then
                 game.Settings.Map (fun s -> { s with GamepadEnabled = not s.GamepadEnabled }) world
 
-        // instructions (kept to two compact lines — the default window shows
-        // roughly game-y 10..205, so these sit right under the action row)
+        // keys, Skate / Shoot per player (kept to two compact lines — the
+        // default window shows roughly game-y 10..205)
         let instrLines =
-            [| "P1: Arrows + RShift/Enter or Pad 1  |  P2: WASD + Space/Tab or Pad 2  |  hold shoot for a harder shot"
-               "Pick HUMAN PLAYER for keyboard control  |  click a team or use UP/DOWN + TAB  |  P pauses" |]
+            [| "Skate: P1 arrow keys, P2 W A S D, pads stick / D-pad   |   Shoot: P1 RShift / Enter, P2 Space / Tab, pads A / B / RT"
+               "Pick HUMAN PLAYER for keyboard control  |  hold shoot for a harder shot  |  UP/DOWN + TAB select  |  P pauses" |]
         for i in 0 .. instrLines.Length - 1 do
             World.doText $"Instr{i}"
                 [Entity.Position .= Coords.screenPos 160.0f (200.0f + float32 i * 9.0f)
-                 Entity.Size .= Coords.nuSize 400.0f 12.0f
+                 Entity.Size .= Coords.nuSize 440.0f 12.0f
                  Entity.Text .= instrLines[i]
                  Entity.Justification .= Justified (JustifyCenter, JustifyMiddle)
                  Entity.TextColor .= Colors.gray
@@ -1004,7 +1030,7 @@ type FsHockeyDispatcher () =
                  Entity.Text .= "Start Match"
                  Entity.TextColor .= Colors.buttonText
                  Entity.Elevation .= 1.0f] world
-               || World.isKeyboardKeyPressed KeyboardKey.Space world then
+               || pressedOn HockeyLeagueMatchup KeyboardKey.Space then
                 FsHockeyDispatcher.StartLeagueMatch game league world
 
             if World.doButton "AbandonLeague"
@@ -1014,7 +1040,7 @@ type FsHockeyDispatcher () =
                  Entity.TextColor .= Colors.buttonText
                  Entity.FontSizing .= Some 12.0f
                  Entity.Elevation .= 1.0f] world
-               || World.isKeyboardKeyPressed KeyboardKey.Escape world then
+               || pressedOn HockeyLeagueMatchup KeyboardKey.Escape then
                 game.SetLeague None world
                 game.SetHockeyMode HockeyMenu world
          | None -> ())
@@ -1093,14 +1119,14 @@ type FsHockeyDispatcher () =
                  Entity.Text @= (if isFinal then "Back to Menu" else "Next Round")
                  Entity.TextColor .= Colors.buttonText
                  Entity.Elevation .= 1.0f] world
-               || World.isKeyboardKeyPressed KeyboardKey.Space world then
+               || (standingsActive && World.isKeyboardKeyPressed KeyboardKey.Space world) then
                 if isFinal then
                     game.SetLeague None world
                     game.SetHockeyMode HockeyMenu world
                 else
                     game.SetHockeyMode HockeyLeagueMatchup world
 
-            if World.isKeyboardKeyPressed KeyboardKey.Escape world then
+            if standingsActive && World.isKeyboardKeyPressed KeyboardKey.Escape world then
                 game.SetLeague None world
                 game.SetHockeyMode HockeyMenu world
          | None -> ())

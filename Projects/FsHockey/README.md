@@ -13,6 +13,12 @@ and [MonoGame version](https://github.com/Thorium/FsHockey/tree/MonoGame).
 
 Hold the shoot key longer for a harder shot. A quick tap gives a weaker pass.
 
+On Windows the accessibility shortcuts (Shift pressed five times for Sticky Keys,
+right Shift held for Filter Keys, Num Lock held for Toggle Keys) are off while
+the game window is in front, so their dialogs can't interrupt a match; they come
+back when you switch away or quit. Players who have the feature itself turned on
+keep it. No admin rights are needed, and nothing is saved to your settings.
+
 ## Menu
 
 | Key       | Action                                    |
@@ -27,6 +33,11 @@ Hold the shoot key longer for a harder shot. A quick tap gives a weaker pass.
 | Esc       | Quit                                      |
 
 Set a team to **HUMAN PLAYER** for keyboard control. Both teams can be human or CPU.
+
+The menu is also clickable: click a team in either list to pick it, click
+**EXHIBITION** or **LEAGUE** to start, and the toggles below them switch
+3v3 / 6v6, fast human, hard CPU and gamepads. Every control shows its
+keyboard shortcut, and the keys above keep working.
 
 
 ## Credits

@@ -22,5 +22,7 @@ module Program =
         // this specifies the world config using the above SDL config
         let worldConfig = { WorldConfig.defaultConfig with SdlConfig = sdlConfig }
 
-        // this runs the engine with the given config and plugin, starting the game
-        World.run worldConfig (FsHockeyPlugin ())
+        // this runs the engine with the given config and plugin, starting the
+        // game; the Windows accessibility shortcuts come back when it ends
+        try World.run worldConfig (FsHockeyPlugin ())
+        finally ShortcutKeys.restore ()

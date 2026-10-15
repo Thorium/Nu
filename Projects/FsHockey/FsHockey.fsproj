@@ -3,6 +3,8 @@
 	<PropertyGroup>
 		<OutputType>Exe</OutputType>
 		<TargetFramework>net10.0</TargetFramework>
+		<!-- Explorer / taskbar icon of the .exe on Windows; WindowIcon.fs sets the window's -->
+		<ApplicationIcon>Icon.ico</ApplicationIcon>
 		<ProjectGuid>{A1B2C3D4-E5F6-7890-ABCD-EF1234567890}</ProjectGuid>
 		<PlatformTarget>AnyCPU</PlatformTarget>
 		<ServerGarbageCollection>True</ServerGarbageCollection>
@@ -50,6 +52,8 @@
         <None Include="Assets\*\*" />
 		<Compile Include="Physics.fs" />
 		<Compile Include="Game.fs" />
+		<Compile Include="ShortcutKeys.fs" />
+		<Compile Include="WindowIcon.fs" />
 		<Compile Include="FsHockey.fs" />
 		<Compile Include="FsHockeyPlugin.fs" />
 		<Compile Include="Program.fs" />
@@ -57,6 +61,9 @@
 			<CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
 		</Content>
 		<Content Include="Overlayer.nuol">
+			<CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+		</Content>
+		<Content Include="Icon.bmp">
 			<CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
 		</Content>
 	</ItemGroup>
