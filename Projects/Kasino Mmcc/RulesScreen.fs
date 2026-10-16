@@ -22,8 +22,10 @@ open Kasino.Domain
 // ── Model ─────────────────────────────────────────────────────────────
 [<Struct>]
 type Tutorial =
-    { CurrentPage: int }
-    static member initial = { CurrentPage = 0 }
+    { CurrentPage: int
+      /// the variant of the game the rules were opened from; None from the menu
+      Playing: GameVariant option }
+    static member initial = { CurrentPage = 0; Playing = None }
 
 type TutorialMessage =
     | NextPage
@@ -313,13 +315,20 @@ type RulesScreenDispatcher () =
                  Entity.StaticImage == Assets.Default.White
                  Entity.Color == Clr.screenBg
                  Entity.Elevation == -1.0f]
+             // Header: opened from a game it names the variant being played - the
+             // table looks the same in both, and players forget which they chose
+             let header, headerColor, headerSize =
+                 match model.Playing with
+                 | Some StandardKasino -> "You are playing Standard Kasino, try to collect points", Clr.limeGreen, 13.0f
+                 | Some LaistoKasino -> "You are playing Laistokasino, try to avoid points", Clr.lightSalmon, 13.0f
+                 | None -> "How to Play Kasino", Clr.gold, 16.0f
              Content.text "Header"
                 [Entity.Position == v3 0.0f 165.0f 0.0f
                  Entity.Size == v3 600.0f 20.0f 0.0f
-                 Entity.Text == "How to Play Kasino"
+                 Entity.Text := header
                  Entity.Justification == Justified (JustifyCenter, JustifyMiddle)
-                 Entity.TextColor == Clr.gold
-                 Entity.FontSizing == Some 16.0f
+                 Entity.TextColor := headerColor
+                 Entity.FontSizing := Some headerSize
                  Entity.Elevation == 2.0f]
              Content.text "PageTitle"
                 [Entity.Position == v3 0.0f 145.0f 0.0f

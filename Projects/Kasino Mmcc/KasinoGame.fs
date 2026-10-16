@@ -36,6 +36,8 @@ type KasinoGameMessage =
 
 type KasinoGameCommand =
     | InstallGame of GameEngine.GameConfig
+    /// open the rules on their first page; from a game, they name the variant being played
+    | OpenRules of playing: GameVariant option
     | PopulateScores
     | ResumeGameplay
     | Exit
@@ -70,11 +72,13 @@ type KasinoGameDispatcher () =
          Simulants.Scores.MenuEvent => ShowMenu
          Game.ExitRequestEvent => Exit]
 
-    override this.Message (model, message, _, _) =
+    override this.Message (model, message, _, world) =
         match message with
         | ShowMenu -> just AtMenu
-        | ShowRules -> just (Tutorial AtMenu)
-        | ShowHelp -> just (Tutorial Playing)
+        | ShowRules -> withSignal (OpenRules None) (Tutorial AtMenu)
+        | ShowHelp ->
+            let playing = (Simulants.Gameplay.GetGameplay world).Config.Variant
+            withSignal (OpenRules (Some playing)) (Tutorial Playing)
         | CloseRules -> (match model with Tutorial back -> just back | _ -> just AtMenu)
         | StartGame config -> withSignal (InstallGame config) Playing
         | ShowScores -> withSignal PopulateScores AtScores
@@ -84,6 +88,8 @@ type KasinoGameDispatcher () =
         match command with
         | InstallGame config ->
             Simulants.Gameplay.SetGameplay (Gameplay.start config) world
+        | OpenRules playing ->
+            Simulants.Rules.SetTutorial { CurrentPage = 0; Playing = playing } world
         | PopulateScores ->
             // copy the just-finished round's result out of the (still-selected)
             // Gameplay model into the Scores screen's own model

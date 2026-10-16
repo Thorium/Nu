@@ -74,6 +74,7 @@ type Gameplay =
       CapturePage: int                              // current page of the capture modal (it paginates)
       LastPlayMessage: string
       ShowRecentPlays: bool                         // "Last moves" popup listing the other seats' recent plays
+      ConfirmQuit: bool                             // the "quit this game?" prompt is up (Menu button or Escape)
       LastChat: string
       LastEval: AI.PlayEvaluation option
       ScoreBreakdowns: (Player * Scoring.ScoreBreakdown) list
@@ -120,6 +121,7 @@ type Gameplay =
           CapturePage = 0
           LastPlayMessage = ""
           ShowRecentPlays = false
+          ConfirmQuit = false
           LastChat = ""
           LastEval = None
           ScoreBreakdowns = []
@@ -156,7 +158,8 @@ type Gameplay =
             Back = back
             DealerOffset = dealerOffset
             LastPlayMessage = "Round 1 - Deal 1"
-            ShowRecentPlays = false }
+            ShowRecentPlays = false
+            ConfirmQuit = false }
 
 // ─── Messages (pure model transitions) and Commands (side-effects) ────
 type GameplayMessage =
@@ -178,6 +181,11 @@ type GameplayMessage =
     | PointerUp
     /// toggle the "Last moves" popup (what the other seats did since your play)
     | ToggleRecentPlays
+    /// the Menu button or Escape: open the "quit this game?" prompt
+    | AskQuit
+    /// the prompt's answers: leave for the menu, or go on
+    | QuitConfirmed
+    | KeepPlaying
     | Ignore
     interface Message
 
@@ -504,7 +512,8 @@ type GameplayDispatcher () =
                 | Place _ -> withSignal PlayPlaceSound gp
         match message with
         | TimeUpdate ->
-            if not gameplay.Active then just gameplay
+            // the game waits while the "quit this game?" prompt is up
+            if not gameplay.Active || gameplay.ConfirmQuit then just gameplay
             else
                 let gp = { gameplay with PhaseTicks = gameplay.PhaseTicks + world.GameDelta.Updates }
                 match gp.Phase with
@@ -592,7 +601,12 @@ type GameplayDispatcher () =
             just { gameplay with CapturePage = gameplay.CapturePage + 1 }
 
         | KeyPressed key ->
-            if gameplay.Active && key = KeyboardKey.Escape then
+            if gameplay.Active && gameplay.ConfirmQuit then
+                // the "quit this game?" prompt: Enter quits, Escape keeps playing
+                if key = KeyboardKey.Enter then withSignal RequestQuit { gameplay with ConfirmQuit = false }
+                elif key = KeyboardKey.Escape then just { gameplay with ConfirmQuit = false }
+                else just gameplay
+            elif gameplay.Active && key = KeyboardKey.Escape then
                 // In the capture modal Escape backs out of the choice; anywhere
                 // else it quits to the menu. (Previously Escape mid-choice
                 // abandoned the whole match.)
@@ -600,7 +614,7 @@ type GameplayDispatcher () =
                     just { gameplay with Phase = WaitingForHuman; PhaseTicks = 0L
                                          SelectedCardIndex = None; CapturePreview = NoCapture
                                          CaptureOptions = []; CapturePage = 0 }
-                else withSignal RequestQuit gameplay
+                else just { gameplay with ConfirmQuit = true }
             else just gameplay
 
         | PointerDown ->
@@ -648,6 +662,9 @@ type GameplayDispatcher () =
             | _ -> just { ended with DragIndex = None }
 
         | ToggleRecentPlays -> just { gameplay with ShowRecentPlays = not gameplay.ShowRecentPlays }
+        | AskQuit -> just { gameplay with ConfirmQuit = true }
+        | QuitConfirmed -> withSignal RequestQuit { gameplay with ConfirmQuit = false }
+        | KeepPlaying -> just { gameplay with ConfirmQuit = false }
         | Ignore -> just gameplay
 
     override this.Command (_, command, screen, world) =
@@ -824,6 +841,52 @@ type GameplayDispatcher () =
         // capture-choice modal — paginated (up to 64 options can exist, so an
         // unbounded column would run off-screen), with Cancel always available
         // and, in Standard Kasino, the option to decline the capture entirely.
+        // The "quit this game?" prompt (Menu button or Escape), over everything:
+        // Yes (or Enter) leaves for the menu, Keep playing (or Escape) resumes
+        let quitPrompt =
+            if not gameplay.ConfirmQuit then []
+            else
+                [ Content.staticSprite "QuitBg"
+                    [Entity.Position == v3 0.0f 0.0f 0.0f
+                     Entity.Size == v3 640.0f 360.0f 0.0f
+                     Entity.StaticImage == Assets.Default.White
+                     Entity.Color == Clr.modalOverlay
+                     Entity.Elevation == 8.0f]
+                  Content.staticSprite "QuitPanel"
+                    [Entity.Position == v3 0.0f 0.0f 0.0f
+                     Entity.Size == v3 380.0f 130.0f 0.0f
+                     Entity.StaticImage == Assets.Default.White
+                     Entity.Color == Clr.screenBg
+                     Entity.Elevation == 8.5f]
+                  Content.text "QuitQuestion"
+                    [Entity.Position == v3 0.0f 36.0f 0.0f
+                     Entity.Size == v3 370.0f 22.0f 0.0f
+                     Entity.Text == "Quit this game and return to the menu?"
+                     Entity.Justification == Justified (JustifyCenter, JustifyMiddle)
+                     Entity.TextColor == Clr.gold
+                     Entity.FontSizing == Some 13.0f
+                     Entity.Elevation == 9.0f]
+                  Content.text "QuitNote"
+                    [Entity.Position == v3 0.0f 14.0f 0.0f
+                     Entity.Size == v3 370.0f 18.0f 0.0f
+                     Entity.Text := $"The {GameVariant.displayName gameplay.Config.Variant} game in progress will be lost."
+                     Entity.Justification == Justified (JustifyCenter, JustifyMiddle)
+                     Entity.TextColor == Clr.lightGray
+                     Entity.FontSizing == Some 10.0f
+                     Entity.Elevation == 9.0f]
+                  Content.button "QuitYes"
+                    [Entity.Position == v3 -85.0f -32.0f 0.0f
+                     Entity.Size == v3 140.0f 30.0f 0.0f
+                     Entity.Text == "Yes, quit"
+                     Entity.Elevation == 9.0f
+                     Entity.ClickEvent => QuitConfirmed]
+                  Content.button "QuitNo"
+                    [Entity.Position == v3 85.0f -32.0f 0.0f
+                     Entity.Size == v3 140.0f 30.0f 0.0f
+                     Entity.Text == "Keep playing"
+                     Entity.Elevation == 9.0f
+                     Entity.ClickEvent => KeepPlaying] ]
+
         let captureModal =
             if gameplay.Phase <> ChoosingCaptureOption then []
             else
@@ -1062,7 +1125,7 @@ type GameplayDispatcher () =
                      Entity.Size == v3 90.0f 22.0f 0.0f
                      Entity.Text == "Menu"
                      Entity.Elevation == 5.0f
-                     Entity.ClickEvent => RequestQuit]
+                     Entity.ClickEvent => AskQuit]
                 // "what did the others just do?" — popup over the top of the table
                 Content.button "RecentBtn"
                     [Entity.Position == v3 210.0f 165.0f 0.0f
@@ -1094,4 +1157,5 @@ type GameplayDispatcher () =
                      Entity.Elevation == 5.0f
                      Entity.ClickEvent => RequestHelp]
 
-                yield! captureModal]]
+                yield! captureModal
+                yield! quitPrompt]]

@@ -163,6 +163,9 @@ module AppState =
     let mutable rulesPage = 0
     let mutable rulesReturnMode = KasinoMenu
 
+    /// The "quit this game?" prompt is up (Menu button or Escape during a game)
+    let mutable confirmQuit = false
+
     // Input guard: prevents Enter key from firing across multiple screens in the same frame
     let mutable enterConsumed = false
 
@@ -1769,7 +1772,8 @@ type KasinoDispatcher () =
         World.doText "RoundInfo"
             [Entity.Position .= v3 Ly.scoreX infoY 0.0f
              Entity.Size .= v3 150.0f 18.0f 0.0f
-             Entity.Text @= $"R{AppState.roundNumber} Deal {gs.DealRound}/{gs.TotalDeals}"
+             // the variant first: the table looks the same in both, and players forget
+             Entity.Text @= $"{GameVariant.shortName gs.Variant}  R{AppState.roundNumber} Deal {gs.DealRound}/{gs.TotalDeals}"
              Entity.TextColor .= Clr.lightGray
              Entity.Justification .= Justified (JustifyLeft, JustifyMiddle)
              Entity.FontSizing .= Some 11.0f
@@ -1796,7 +1800,7 @@ type KasinoDispatcher () =
              Entity.Elevation .= 3.0f] world
 
         // ── "?" Help button (top-left, always declared, hidden during modal) ──
-        let helpVisible = AppState.phase <> ChoosingCaptureOption
+        let helpVisible = AppState.phase <> ChoosingCaptureOption && not AppState.confirmQuit
         if World.doButton "BtnHelp"
             [Entity.Position .= v3 -75.0f 168.0f 0.0f
              Entity.Size .= v3 40.0f 24.0f 0.0f
@@ -1833,8 +1837,7 @@ type KasinoDispatcher () =
              Entity.Visible @= helpVisible
              Entity.Elevation .= 4.0f] world then
             if helpVisible then
-                AppState.resetMenu ()
-                game.SetKasinoMode KasinoMenu world
+                AppState.confirmQuit <- true
 
         // ── "Last moves" toggle (top-left, next to Menu): a popup over the top
         // of the table lists what the other seats did since your play ──
@@ -2045,16 +2048,73 @@ type KasinoDispatcher () =
                 AppState.selectedCardIndex <- None
                 AppState.capturePreview <- NoCapture
 
+        // ── "Quit this game?" prompt (Menu button or Escape), over everything ──
+        // Modal: Yes (or Enter) leaves for the menu, Keep playing (or Escape)
+        // resumes, and the phases below wait meanwhile. `confirming` is this
+        // frame's value, so the Escape that closes the prompt is not also read
+        // below as a new quit.
+        let confirming = AppState.confirmQuit
+        World.doStaticSprite "QuitBg"
+            [Entity.Position .= v3 0.0f 0.0f 0.0f
+             Entity.Size .= v3 900.0f 700.0f 0.0f
+             Entity.StaticImage .= Assets.Default.White
+             Entity.Color .= Clr.modalOverlay
+             Entity.Visible @= confirming
+             Entity.Elevation .= 8.0f] world |> ignore
+        World.doStaticSprite "QuitPanel"
+            [Entity.Position .= v3 0.0f 0.0f 0.0f
+             Entity.Size .= v3 380.0f 130.0f 0.0f
+             Entity.StaticImage .= Assets.Default.White
+             Entity.Color .= Clr.screenBg
+             Entity.Visible @= confirming
+             Entity.Elevation .= 8.5f] world |> ignore
+        World.doText "QuitQuestion"
+            [Entity.Position .= v3 0.0f 36.0f 0.0f
+             Entity.Size .= v3 370.0f 22.0f 0.0f
+             Entity.Text .= "Quit this game and return to the menu?"
+             Entity.Justification .= Justified (JustifyCenter, JustifyMiddle)
+             Entity.TextColor .= Clr.gold
+             Entity.FontSizing .= Some 13.0f
+             Entity.Visible @= confirming
+             Entity.Elevation .= 9.0f] world
+        World.doText "QuitNote"
+            [Entity.Position .= v3 0.0f 14.0f 0.0f
+             Entity.Size .= v3 370.0f 18.0f 0.0f
+             Entity.Text @= $"The {GameVariant.displayName gs.Variant} game in progress will be lost."
+             Entity.Justification .= Justified (JustifyCenter, JustifyMiddle)
+             Entity.TextColor .= Clr.lightGray
+             Entity.FontSizing .= Some 10.0f
+             Entity.Visible @= confirming
+             Entity.Elevation .= 9.0f] world
+        if World.doButton "BtnQuitYes"
+            [Entity.Position .= v3 -85.0f -32.0f 0.0f
+             Entity.Size .= v3 140.0f Ly.btnH 0.0f
+             Entity.Text .= "Yes, quit"
+             Entity.Visible @= confirming
+             Entity.Elevation .= 9.0f] world
+           || (confirming && world.Advancing && World.isKeyboardKeyPressed KeyboardKey.Enter world) then
+            if confirming then
+                AppState.confirmQuit <- false
+                AppState.resetMenu ()
+                game.SetKasinoMode KasinoMenu world
+        if World.doButton "BtnQuitNo"
+            [Entity.Position .= v3 85.0f -32.0f 0.0f
+             Entity.Size .= v3 140.0f Ly.btnH 0.0f
+             Entity.Text .= "Keep playing"
+             Entity.Visible @= confirming
+             Entity.Elevation .= 9.0f] world
+           || (confirming && world.Advancing && World.isKeyboardKeyPressed KeyboardKey.Escape world) then
+            AppState.confirmQuit <- false
+
         // ── Phase-specific input handling (advancing only) ────
-        if world.Advancing then
+        if world.Advancing && not confirming then
             match AppState.phase with
             | Shuffling | Dealing | ComputerThinking | AnimatingPlay when
                 World.isKeyboardKeyPressed KeyboardKey.Escape world ->
                 // Escape returns to the menu from phases with no Escape
                 // handling of their own — in particular watch-AI-only games,
                 // which never reach the human input branch.
-                AppState.resetMenu ()
-                game.SetKasinoMode KasinoMenu world
+                AppState.confirmQuit <- true
 
             | Dealing ->
                 AppState.dealStepElapsed <- AppState.dealStepElapsed + dt
@@ -2107,8 +2167,7 @@ type KasinoDispatcher () =
                             AppState.selectedCardIndex <- None
                             AppState.capturePreview <- NoCapture
                         else
-                            AppState.resetMenu ()
-                            game.SetKasinoMode KasinoMenu world
+                            AppState.confirmQuit <- true
                     elif World.isKeyboardKeyPressed KeyboardKey.Enter world then
                         match AppState.selectedCardIndex with
                         | Some idx -> Helpers.processHumanPlay idx
@@ -2320,8 +2379,7 @@ type KasinoDispatcher () =
                     AppState.enterScores ()
                     game.SetKasinoMode KasinoScores world
                 elif World.isKeyboardKeyPressed KeyboardKey.Escape world then
-                    AppState.resetMenu ()
-                    game.SetKasinoMode KasinoMenu world
+                    AppState.confirmQuit <- true
 
             | GameOver -> ()
 
@@ -2476,13 +2534,22 @@ type KasinoDispatcher () =
     // ═══════════════════════════════════════════════════════════════
     static member RenderRules (game : Game, world : World) =
 
+        // Header: opened from a game it names the variant being played - the
+        // table looks the same in both, and players forget which they chose
+        let title, titleColor, titleSize =
+            if AppState.rulesReturnMode = KasinoPlaying then
+                match AppState.config.Variant with
+                | StandardKasino -> "You are playing Standard Kasino, try to collect points", Clr.limeGreen, 13.0f
+                | LaistoKasino -> "You are playing Laistokasino, try to avoid points", Clr.lightSalmon, 13.0f
+            else
+                "How to Play Kasino", Clr.gold, 16.0f
         World.doText "RuTitle"
             [Entity.Position .= v3 0.0f 165.0f 0.0f
-             Entity.Size .= v3 400.0f 28.0f 0.0f
-             Entity.Text .= "How to Play Kasino"
+             Entity.Size .= v3 600.0f 28.0f 0.0f
+             Entity.Text @= title
              Entity.Justification .= Justified (JustifyCenter, JustifyMiddle)
-             Entity.TextColor .= Clr.gold
-             Entity.FontSizing .= Some 16.0f
+             Entity.TextColor @= titleColor
+             Entity.FontSizing @= Some titleSize
              Entity.Elevation .= 1.0f] world
 
         let pageTitle = RulesContent.pageTitle AppState.rulesPage

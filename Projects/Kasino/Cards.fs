@@ -47,6 +47,19 @@ type GameVariant =
     /// Minimize points (also known as Misa-Kasino)
     | LaistoKasino
 
+/// The variant's name as the game shows it: the table looks the same in
+/// both, so the screens say which one is being played.
+module GameVariant =
+    let displayName (variant: GameVariant) =
+        match variant with
+        | StandardKasino -> "Standard Kasino"
+        | LaistoKasino -> "Laistokasino"
+
+    let shortName (variant: GameVariant) =
+        match variant with
+        | StandardKasino -> "Standard"
+        | LaistoKasino -> "Laisto"
+
 /// Player type
 [<Struct>]
 type PlayerType =
