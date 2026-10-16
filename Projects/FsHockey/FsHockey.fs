@@ -78,6 +78,9 @@ module FsHockeyExtensions =
         member this.GetLeague world : League option = this.Get (nameof Game.League) world
         member this.SetLeague (value : League option) world = this.Set (nameof Game.League) value world
         member this.League = lens (nameof Game.League) this this.GetLeague this.SetLeague
+        member this.GetConfirmQuit world : bool = this.Get (nameof Game.ConfirmQuit) world
+        member this.SetConfirmQuit (value : bool) world = this.Set (nameof Game.ConfirmQuit) value world
+        member this.ConfirmQuit = lens (nameof Game.ConfirmQuit) this this.GetConfirmQuit this.SetConfirmQuit
 
     type Screen with
         member this.GetMatchState world : Match = this.Get (nameof Screen.MatchState) world
@@ -92,6 +95,9 @@ module FsHockeyExtensions =
         member this.GetPaused world : bool = this.Get (nameof Screen.Paused) world
         member this.SetPaused (value : bool) world = this.Set (nameof Screen.Paused) value world
         member this.Paused = lens (nameof Screen.Paused) this this.GetPaused this.SetPaused
+        member this.GetConfirmQuit world : bool = this.Get (nameof Screen.ConfirmQuit) world
+        member this.SetConfirmQuit (value : bool) world = this.Set (nameof Screen.ConfirmQuit) value world
+        member this.ConfirmQuit = lens (nameof Screen.ConfirmQuit) this this.GetConfirmQuit this.SetConfirmQuit
 
 // ─── Coordinate Mapping ───────────────────────────────────────────────
 // Game: top-left origin (0,0), X right, Y down, ~320x200 field + HUD
@@ -477,6 +483,52 @@ module Draw =
         if periodStr <> "" then
             hudText "HudPeriod" (Coords.screenPos 160.0f (hudY + 22.0f)) (Coords.nuSize 120.0f 14.0f) periodStr JustifyCenter Colors.hudText (Some 8.0f)
 
+// ─── Quit-the-league Prompt ───────────────────────────────────────────
+/// Over a league screen: Escape asked to leave the league, whose standings
+/// would be lost with it. Y quits, N or Escape keeps playing - Y / N rather
+/// than Enter or Space, which are the shoot and continue keys. Declared by
+/// whichever league screen is up; that screen reads the answer.
+module QuitPrompt =
+
+    let declare (world: World) =
+        World.doStaticSprite "QuitBg"
+            [Entity.Position .= v3 0.0f 0.0f 0.0f
+             Entity.Size .= v3 720.0f 558.0f 0.0f
+             Entity.StaticImage .= Assets.Default.White
+             Entity.Color .= color 0.0f 0.0f 0.0f 0.65f
+             Entity.Elevation .= 11.0f] world |> ignore
+        World.doText "QuitTitle"
+            [Entity.Position .= v3 0.0f 24.0f 0.0f
+             Entity.Size .= v3 400.0f 32.0f 0.0f
+             Entity.Text .= "QUIT THE LEAGUE?"
+             Entity.Justification .= Justified (JustifyCenter, JustifyMiddle)
+             Entity.TextColor .= Colors.goalFlash
+             Entity.Elevation .= 12.0f] world
+        World.doText "QuitNote"
+            [Entity.Position .= v3 0.0f -8.0f 0.0f
+             Entity.Size .= v3 400.0f 20.0f 0.0f
+             Entity.Text .= "The standings so far will be lost"
+             Entity.Justification .= Justified (JustifyCenter, JustifyMiddle)
+             Entity.TextColor .= Colors.gray
+             Entity.FontSizing .= Some 10.0f
+             Entity.Elevation .= 12.0f] world
+        World.doText "QuitHint"
+            [Entity.Position .= v3 0.0f -30.0f 0.0f
+             Entity.Size .= v3 400.0f 20.0f 0.0f
+             Entity.Text .= "Y: quit the league    N / Esc: keep playing"
+             Entity.Justification .= Justified (JustifyCenter, JustifyMiddle)
+             Entity.TextColor .= Colors.gray
+             Entity.FontSizing .= Some 10.0f
+             Entity.Elevation .= 12.0f] world
+
+    /// The answer keys, read while the prompt is up: Some true = quit,
+    /// Some false = keep playing, None = no answer yet
+    let answer (world: World) =
+        if not world.Advancing then None
+        elif World.isKeyboardKeyPressed KeyboardKey.Y world then Some true
+        elif World.isKeyboardKeyPressed KeyboardKey.N world || World.isKeyboardKeyPressed KeyboardKey.Escape world then Some false
+        else None
+
 // ─── Gameplay Screen ──────────────────────────────────────────────────
 type GameplayDispatcher () =
     inherit ScreenDispatcherImSim ()
@@ -485,18 +537,31 @@ type GameplayDispatcher () =
         [define Screen.MatchState Defaults.matchState
          define Screen.LeagueMode false
          define Screen.Request NoRequest
-         define Screen.Paused false]
+         define Screen.Paused false
+         define Screen.ConfirmQuit false]
 
     override this.Process (_, screen, world) =
         if screen.GetSelected world then
 
+            // the "quit the league?" prompt, as of this frame: the match waits
+            // while it is up, and the Escape that closes it is not also read
+            // below as a new quit
+            let confirming = screen.GetConfirmQuit world
+            match QuitPrompt.answer world with
+            | Some true when confirming ->
+                screen.SetConfirmQuit false world
+                screen.SetRequest QuitRequested world
+            | Some false when confirming -> screen.SetConfirmQuit false world
+            | _ -> ()
+
             // P pauses/resumes the match
             if world.Advancing
+               && not confirming
                && (screen.GetMatchState world).Playing
                && World.isKeyboardKeyPressed KeyboardKey.P world then
                 screen.SetPaused (not (screen.GetPaused world)) world
 
-            let paused = screen.GetPaused world
+            let paused = screen.GetPaused world || confirming
 
             // advance the simulation: one pure step from Match to Match. The
             // whole game state (including its PRNG) is an immutable value on
@@ -603,8 +668,8 @@ type GameplayDispatcher () =
                      Entity.TextColor .= Colors.goalFlash
                      Entity.Elevation .= 6.0f] world
 
-            // pause overlay
-            if paused then
+            // pause overlay (the quit prompt is its own)
+            if paused && not confirming then
                 World.doStaticSprite "PauseBg"
                     [Entity.Position .= v3 0.0f 0.0f 0.0f
                      Entity.Size .= v3 720.0f 558.0f 0.0f
@@ -677,12 +742,18 @@ type GameplayDispatcher () =
                      Entity.Size .= v3 160.0f 40.0f 0.0f
                      Entity.Text .= "Menu"
                      Entity.TextColor .= Colors.buttonText
-                     Entity.Elevation .= 8.0f] world then
-                    screen.SetRequest QuitRequested world
+                     Entity.Elevation .= 8.0f] world
+                   && not confirming then
+                    if screen.GetLeagueMode world then screen.SetConfirmQuit true world
+                    else screen.SetRequest QuitRequested world
 
-            // escape quits to menu at any point
-            if World.isKeyboardKeyPressed KeyboardKey.Escape world then
-                screen.SetRequest QuitRequested world
+            // escape quits to menu at any point - in a league it asks first,
+            // the standings being lost with the league
+            if World.isKeyboardKeyPressed KeyboardKey.Escape world && not confirming then
+                if screen.GetLeagueMode world then screen.SetConfirmQuit true world
+                else screen.SetRequest QuitRequested world
+
+            if confirming then QuitPrompt.declare world
 
             World.endGroup world
 
@@ -693,7 +764,8 @@ type FsHockeyDispatcher () =
     static member Properties =
         [define Game.HockeyMode HockeyMenu
          define Game.Settings MenuSettings.initial
-         define Game.League None]
+         define Game.League None
+         define Game.ConfirmQuit false]
 
     /// A fresh PRNG seed at the moment a match/league starts.
     static member private FreshSeed (world: World) =
@@ -721,6 +793,7 @@ type FsHockeyDispatcher () =
                   FivePlayer = s.FivePlayer; FastHuman = s.FastHuman; HardMode = s.HardMode
                   NumPeriods = LeaguePeriods; Seed = FsHockeyDispatcher.FreshSeed world }) world
         Simulants.Gameplay.SetLeagueMode true world
+        Simulants.Gameplay.SetConfirmQuit false world
         Simulants.Gameplay.SetPaused false world
         game.SetHockeyMode HockeyLeaguePlaying world
 
@@ -740,6 +813,19 @@ type FsHockeyDispatcher () =
         // shoot key and Escape the in-match quit. `mode` is this frame's, so a
         // key that switches screens isn't handled again by the next one.
         let pressedOn screenMode key = mode = screenMode && World.isKeyboardKeyPressed key world
+
+        // The "quit the league?" prompt over the matchup and standings screens
+        // (the match screen keeps its own): as of this frame, so the Escape
+        // that closes it is not also read below as a new quit
+        let confirming = game.GetConfirmQuit world
+        match QuitPrompt.answer world with
+        | Some true when confirming ->
+            game.SetConfirmQuit false world
+            game.SetLeague None world
+            game.SetHockeyMode HockeyMenu world
+        | Some false when confirming -> game.SetConfirmQuit false world
+        | _ -> ()
+        let pressedOn screenMode key = not confirming && pressedOn screenMode key
 
         // ─── MENU SCREEN ───────────────────────────────────────────
         World.beginScreen Simulants.Menu.Name (mode = HockeyMenu) behavior [] world |> ignore
@@ -1041,8 +1127,9 @@ type FsHockeyDispatcher () =
                  Entity.FontSizing .= Some 12.0f
                  Entity.Elevation .= 1.0f] world
                || pressedOn HockeyLeagueMatchup KeyboardKey.Escape then
-                game.SetLeague None world
-                game.SetHockeyMode HockeyMenu world
+                if not confirming then game.SetConfirmQuit true world
+
+            if confirming then QuitPrompt.declare world
          | None -> ())
         World.endGroup world
         World.endScreen world
@@ -1119,16 +1206,24 @@ type FsHockeyDispatcher () =
                  Entity.Text @= (if isFinal then "Back to Menu" else "Next Round")
                  Entity.TextColor .= Colors.buttonText
                  Entity.Elevation .= 1.0f] world
-               || (standingsActive && World.isKeyboardKeyPressed KeyboardKey.Space world) then
-                if isFinal then
+               || (standingsActive && not confirming && World.isKeyboardKeyPressed KeyboardKey.Space world) then
+                if confirming then ()
+                elif isFinal then
                     game.SetLeague None world
                     game.SetHockeyMode HockeyMenu world
                 else
                     game.SetHockeyMode HockeyLeagueMatchup world
 
-            if standingsActive && World.isKeyboardKeyPressed KeyboardKey.Escape world then
-                game.SetLeague None world
-                game.SetHockeyMode HockeyMenu world
+            // Escape leaves the league, asking first while it is still on;
+            // the final table is already its end
+            if standingsActive && not confirming && World.isKeyboardKeyPressed KeyboardKey.Escape world then
+                if isFinal then
+                    game.SetLeague None world
+                    game.SetHockeyMode HockeyMenu world
+                else
+                    game.SetConfirmQuit true world
+
+            if confirming then QuitPrompt.declare world
          | None -> ())
         World.endGroup world
         World.endScreen world
