@@ -2071,7 +2071,7 @@ type KasinoDispatcher () =
         World.doText "QuitQuestion"
             [Entity.Position .= v3 0.0f 36.0f 0.0f
              Entity.Size .= v3 370.0f 22.0f 0.0f
-             Entity.Text .= "Quit this game and return to the menu?"
+             Entity.Text .= "Do you want to quit?"
              Entity.Justification .= Justified (JustifyCenter, JustifyMiddle)
              Entity.TextColor .= Clr.gold
              Entity.FontSizing .= Some 13.0f
@@ -2080,7 +2080,7 @@ type KasinoDispatcher () =
         World.doText "QuitNote"
             [Entity.Position .= v3 0.0f 14.0f 0.0f
              Entity.Size .= v3 370.0f 18.0f 0.0f
-             Entity.Text @= $"The {GameVariant.displayName gs.Variant} game in progress will be lost."
+             Entity.Text @= $"Your {GameVariant.displayName gs.Variant} game will be lost."
              Entity.Justification .= Justified (JustifyCenter, JustifyMiddle)
              Entity.TextColor .= Clr.lightGray
              Entity.FontSizing .= Some 10.0f
